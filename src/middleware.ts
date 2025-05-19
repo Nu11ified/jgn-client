@@ -65,4 +65,5 @@ export async function middleware(request: NextRequest) {
  
 export const config = {
 	matcher: ["/dashboard/:path*", "/admin/:path*"], // Added admin routes to the matcher
+	runtime: 'nodejs', // Use Node.js runtime to support database operations
 };

@@ -9,6 +9,8 @@ export const users = mysqlTable("users", {
     isModerator: boolean("is_moderator").default(false).notNull(),
     isAdmin: boolean("is_admin").default(false).notNull(),
     lastSynced: timestamp("last_synced").defaultNow().onUpdateNow(),
+    googleEmail: varchar("google_email", { length: 255 }).unique(),
+    forumEmail: varchar("forum_email", { length: 255 }).unique(),
 });
 
 export const servers = mysqlTable("servers", {
@@ -68,6 +70,32 @@ export const discordRoleToTeamspeakGroupMapping = mysqlTable("discord_role_to_te
     discordRoleId: bigint("discord_role_id", { mode: "bigint" }).primaryKey().unique().notNull().references(() => roles.roleId, { onDelete: "cascade" }),
     teamspeakSgid: int("teamspeak_sgid").notNull().references(() => teamspeakServerGroups.sgid, { onDelete: "cascade" }),
 });
+
+export const driveScrape = mysqlTable("drive_scrape", {
+    id: int("id").primaryKey().autoincrement(),
+    name: varchar("name", { length: 255 }).notNull(),
+    link: text("link").notNull(),
+    type: varchar("type", { length: 50 }).notNull(),
+});
+
+export const discordRoleToDriveMapping = mysqlTable("discord_role_to_drive_mapping", {
+    discordRoleId: bigint("discord_role_id", { mode: "bigint" }).notNull().references(() => roles.roleId, { onDelete: "cascade" }),
+    driveScrapeId: int("drive_scrape_id").notNull().references(() => driveScrape.id, { onDelete: "cascade" }),
+}, (table) => ({
+    pk: primaryKey({ columns: [table.discordRoleId, table.driveScrapeId] }),
+}));
+
+export const forumGroups = mysqlTable("forum_groups", {
+    id: int("id").primaryKey().notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+});
+
+export const discordRoleToForumGroupMapping = mysqlTable("discord_role_to_forum_group_mapping", {
+    discordRoleId: bigint("discord_role_id", { mode: "bigint" }).notNull().references(() => roles.roleId, { onDelete: "cascade" }),
+    forumGroupId: int("forum_group_id").notNull().references(() => forumGroups.id, { onDelete: "cascade" }),
+}, (table) => ({
+    pk: primaryKey({ columns: [table.discordRoleId, table.forumGroupId] }),
+}));
 
 // Relations (optional but good for ORM features)
 
@@ -165,5 +193,35 @@ export const discordRoleToTeamspeakGroupMappingRelations = relations(discordRole
     teamspeakServerGroup: one(teamspeakServerGroups, {
         fields: [discordRoleToTeamspeakGroupMapping.teamspeakSgid],
         references: [teamspeakServerGroups.sgid],
+    }),
+}));
+
+export const driveScrapeRelations = relations(driveScrape, ({ many }) => ({
+    discordRoleToDriveMappings: many(discordRoleToDriveMapping),
+}));
+
+export const discordRoleToDriveMappingRelations = relations(discordRoleToDriveMapping, ({ one }) => ({
+    discordRole: one(roles, {
+        fields: [discordRoleToDriveMapping.discordRoleId],
+        references: [roles.roleId],
+    }),
+    driveScrape: one(driveScrape, {
+        fields: [discordRoleToDriveMapping.driveScrapeId],
+        references: [driveScrape.id],
+    }),
+}));
+
+export const forumGroupsRelations = relations(forumGroups, ({ many }) => ({
+    discordRoleToForumGroupMappings: many(discordRoleToForumGroupMapping),
+}));
+
+export const discordRoleToForumGroupMappingRelations = relations(discordRoleToForumGroupMapping, ({ one }) => ({
+    discordRole: one(roles, {
+        fields: [discordRoleToForumGroupMapping.discordRoleId],
+        references: [roles.roleId],
+    }),
+    forumGroup: one(forumGroups, {
+        fields: [discordRoleToForumGroupMapping.forumGroupId],
+        references: [forumGroups.id],
     }),
 }));

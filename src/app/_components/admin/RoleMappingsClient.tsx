@@ -76,13 +76,13 @@ export default function RoleMappingsClient({
   const roleMappings = roleMappingsData ?? initialRoleMappings;
 
   const { data: discordRolesData, isLoading: isLoadingDiscordRoles, error: discordRolesError } = api.admin.roles.listRoles.useQuery(
-    { limit: 200 }, 
+    { limit: 1000 }, 
     { initialData: initialDiscordRoles ?? undefined, refetchOnWindowFocus: false, enabled: !!initialDiscordRoles }
   );
   const discordRoles = discordRolesData ?? initialDiscordRoles;
 
   const { data: tsGroupsData, isLoading: isLoadingTsGroups, error: tsGroupsError } = api.admin.teamSpeakGroups.listTsGroups.useQuery(
-    { limit: 200 }, 
+    { limit: 1000 }, 
     { initialData: initialTsGroups ?? undefined, refetchOnWindowFocus: false, enabled: !!initialTsGroups }
   );
   const tsGroups = tsGroupsData ?? initialTsGroups;

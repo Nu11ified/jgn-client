@@ -75,11 +75,41 @@ export default function RoleMappingsClient({
   );
   const roleMappings = roleMappingsData ?? initialRoleMappings;
 
-  const { data: discordRolesData, isLoading: isLoadingDiscordRoles, error: discordRolesError } = api.admin.roles.listRoles.useQuery(
-    { limit: 1000 }, 
-    { initialData: initialDiscordRoles ?? undefined, refetchOnWindowFocus: false, enabled: !!initialDiscordRoles }
+  // --- Discord Role Dropdown Backend Pagination & Search ---
+  const [discordRoleSearch, setDiscordRoleSearch] = useState("");
+  const [discordRolePage, setDiscordRolePage] = useState(0);
+  const ROLES_PER_PAGE = 100;
+
+  // Fetch roles from backend with skip/limit
+  const {
+    data: discordRolesData,
+    isLoading: isLoadingDiscordRoles,
+    error: discordRolesError,
+  } = api.admin.roles.listRoles.useQuery(
+    {
+      skip: discordRolePage * ROLES_PER_PAGE,
+      limit: ROLES_PER_PAGE,
+      // If backend supports search, add: search: discordRoleSearch
+    },
+    {
+      refetchOnWindowFocus: false,
+    }
   );
-  const discordRoles = discordRolesData ?? initialDiscordRoles;
+  const discordRoles = useMemo(() => discordRolesData ?? [], [discordRolesData]);
+
+  // If backend does not support search, filter locally
+  const filteredDiscordRoles = useMemo(() => {
+    const search = discordRoleSearch.trim().toLowerCase();
+    if (!search) return discordRoles;
+    return discordRoles.filter(role =>
+      role.role_name.toLowerCase().includes(search) ||
+      role.role_id.toLowerCase().includes(search)
+    );
+  }, [discordRoles, discordRoleSearch]);
+
+  // Pagination controls (backend)
+  const hasNextPage = discordRoles.length === ROLES_PER_PAGE;
+  const hasPrevPage = discordRolePage > 0;
 
   const { data: tsGroupsData, isLoading: isLoadingTsGroups, error: tsGroupsError } = api.admin.teamSpeakGroups.listTsGroups.useQuery(
     { limit: 1000 }, 
@@ -257,6 +287,16 @@ export default function RoleMappingsClient({
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
                 <div>
                   <label htmlFor="discord_role_id" className="block text-sm font-medium mb-1">Discord Role</label>
+                  {/* Search bar for Discord roles */}
+                  <Input
+                    placeholder="Search Discord roles..."
+                    value={discordRoleSearch}
+                    onChange={e => {
+                      setDiscordRoleSearch(e.target.value);
+                      setDiscordRolePage(0); // Reset to first page on search
+                    }}
+                    className="mb-2"
+                  />
                   <Controller
                     name="discord_role_id"
                     control={control}
@@ -270,11 +310,38 @@ export default function RoleMappingsClient({
                           <SelectValue placeholder="Select a Discord Role" />
                         </SelectTrigger>
                         <SelectContent>
-                          {uniqueDiscordRoles?.map((role: DiscordRole) => (
+                          {filteredDiscordRoles.length === 0 && (
+                            <div className="px-4 py-2 text-muted-foreground">No roles found.</div>
+                          )}
+                          {filteredDiscordRoles.map((role: DiscordRole) => (
                             <SelectItem key={role.role_id} value={role.role_id}>
                               {role.role_name} (ID: {role.role_id})
                             </SelectItem>
                           ))}
+                          {/* Pagination controls (backend) */}
+                          <div className="flex items-center justify-between px-2 py-1 border-t mt-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={!hasPrevPage}
+                              onClick={() => setDiscordRolePage(p => Math.max(0, p - 1))}
+                            >
+                              Prev
+                            </Button>
+                            <span className="text-xs text-muted-foreground">
+                              Page {discordRolePage + 1}
+                            </span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={!hasNextPage}
+                              onClick={() => setDiscordRolePage(p => p + 1)}
+                            >
+                              Next
+                            </Button>
+                          </div>
                         </SelectContent>
                       </Select>
                     )}

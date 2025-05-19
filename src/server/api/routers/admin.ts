@@ -36,7 +36,7 @@ const ZodUserInDB = z.object({
   is_admin: z.boolean().default(false),
   discord_id: z.string(), // Changed from number
   api_key: z.string(),
-  last_synced: z.string().datetime(),
+  last_synced: z.string().optional().nullable(),
 });
 
 const ZodUserUpdate = z.object({
@@ -131,7 +131,7 @@ const ZodBanHistoryInDB = z.object({
   reason: z.string().nullable().optional(),
   id: z.number().int(),
   user_discord_id: z.string(), // Changed from number
-  banned_at: z.string().datetime(),
+  banned_at: z.string().optional().nullable(),
 });
 
 const ZodBanHistoryUpdate = z.object({
@@ -236,7 +236,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodUserInDB))
@@ -341,7 +341,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodServerInDB))
@@ -444,7 +444,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodUserServerMembershipInDB))
@@ -452,7 +452,10 @@ export const adminRouter = createTRPCRouter({
         try {
           const response = await axios.get<z.infer<typeof ZodUserServerMembershipInDB>[]>(
             `${API_BASE_URL}/admin/user_server_memberships/`,
-            { params: input, headers: { "X-API-Key": ctx.dbUser.apiKey } }
+            {
+              params: input,
+              headers: { "X-API-Key": ctx.dbUser.apiKey },
+            }
           );
           return response.data;
         } catch (error) {
@@ -539,7 +542,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodRoleInDB))
@@ -547,7 +550,10 @@ export const adminRouter = createTRPCRouter({
         try {
           const response = await axios.get<z.infer<typeof ZodRoleInDB>[]>(
             `${API_BASE_URL}/admin/roles/`,
-            { params: input, headers: { "X-API-Key": ctx.dbUser.apiKey } }
+            {
+              params: input,
+              headers: { "X-API-Key": ctx.dbUser.apiKey },
+            }
           );
           return response.data;
         } catch (error) {
@@ -633,7 +639,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodUserServerRoleInDB))
@@ -641,7 +647,10 @@ export const adminRouter = createTRPCRouter({
         try {
           const response = await axios.get<z.infer<typeof ZodUserServerRoleInDB>[]>(
             `${API_BASE_URL}/admin/user_server_roles/`,
-            { params: input, headers: { "X-API-Key": ctx.dbUser.apiKey } }
+            {
+              params: input,
+              headers: { "X-API-Key": ctx.dbUser.apiKey },
+            }
           );
           return response.data;
         } catch (error) {
@@ -705,7 +714,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodBanHistoryInDB))
@@ -713,7 +722,10 @@ export const adminRouter = createTRPCRouter({
         try {
           const response = await axios.get<z.infer<typeof ZodBanHistoryInDB>[]>(
             `${API_BASE_URL}/admin/ban_history/`,
-            { params: input, headers: { "X-API-Key": ctx.dbUser.apiKey } }
+            {
+              params: input,
+              headers: { "X-API-Key": ctx.dbUser.apiKey },
+            }
           );
           return response.data;
         } catch (error) {
@@ -799,7 +811,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodTeamSpeakServerGroupInDB))
@@ -807,7 +819,10 @@ export const adminRouter = createTRPCRouter({
         try {
           const response = await axios.get<z.infer<typeof ZodTeamSpeakServerGroupInDB>[]>(
             `${API_BASE_URL}/admin/teamspeak_groups/`,
-            { params: input, headers: { "X-API-Key": ctx.dbUser.apiKey } }
+            {
+              params: input,
+              headers: { "X-API-Key": ctx.dbUser.apiKey },
+            }
           );
           return response.data;
         } catch (error) {
@@ -909,7 +924,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodUserTeamSpeakServerGroupInDB))
@@ -917,7 +932,10 @@ export const adminRouter = createTRPCRouter({
         try {
           const response = await axios.get<z.infer<typeof ZodUserTeamSpeakServerGroupInDB>[]>(
             `${API_BASE_URL}/admin/user_teamspeak_groups/`,
-            { params: input, headers: { "X-API-Key": ctx.dbUser.apiKey } }
+            {
+              params: input,
+              headers: { "X-API-Key": ctx.dbUser.apiKey },
+            }
           );
           return response.data;
         } catch (error) {
@@ -981,7 +999,7 @@ export const adminRouter = createTRPCRouter({
       .input(
         z.object({
           skip: z.number().int().optional().default(0),
-          limit: z.number().int().optional().default(100).transform(val => Math.min(val, 1000)),
+          limit: z.number().int().optional().default(1000),
         })
       )
       .output(z.array(ZodDiscordRoleToTeamSpeakGroupMappingInDB))
@@ -989,7 +1007,10 @@ export const adminRouter = createTRPCRouter({
         try {
           const response = await axios.get<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>[]>(
             `${API_BASE_URL}/admin/role_mappings/`,
-            { params: input, headers: { "X-API-Key": ctx.dbUser.apiKey } }
+            {
+              params: input,
+              headers: { "X-API-Key": ctx.dbUser.apiKey },
+            }
           );
           return response.data;
         } catch (error) {

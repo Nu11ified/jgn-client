@@ -309,7 +309,11 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
                         {user.is_moderator && <Badge variant="secondary">Moderator</Badge>}
                         {!user.is_admin && !user.is_moderator && <Badge variant="outline">User</Badge>}
                       </TableCell>
-                      <TableCell style={{ width: '30%' }} className="truncate">{new Date(user.last_synced).toLocaleString()}</TableCell>
+                      <TableCell style={{ width: '30%' }} className="truncate">{
+                        user.last_synced && !isNaN(Date.parse(user.last_synced))
+                          ? new Date(user.last_synced).toLocaleString()
+                          : 'Invalid date'
+                      }</TableCell>
                     </TableRow>
                   );
                 })}

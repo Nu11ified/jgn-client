@@ -12,6 +12,9 @@ const config = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  experimental: {
+    nodeMiddleware: true,
+  },
 };
 
 export default config;

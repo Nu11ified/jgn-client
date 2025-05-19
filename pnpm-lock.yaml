@@ -95,6 +95,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.69.0
         version: 5.76.1(react@19.1.0)
+      '@tanstack/react-virtual':
+        specifier: ^3.13.8
+        version: 3.13.8(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@trpc/client':
         specifier: ^11.0.0
         version: 11.1.2(@trpc/server@11.1.2(typescript@5.8.3))(typescript@5.8.3)
@@ -1613,6 +1616,15 @@ packages:
     resolution: {integrity: sha512-YxdLZVGN4QkT5YT1HKZQWiIlcgauIXEIsMOTSjvyD5wLYK8YVvKZUPAysMqossFJJfDpJW3pFn7WNZuPOqq+fw==}
     peerDependencies:
       react: ^18 || ^19
+
+  '@tanstack/react-virtual@3.13.8':
+    resolution: {integrity: sha512-meS2AanUg50f3FBSNoAdBSRAh8uS0ue01qm7zrw65KGJtiXB9QXfybqZwkh4uFpRv2iX/eu5tjcH5wqUpwYLPg==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  '@tanstack/virtual-core@3.13.8':
+    resolution: {integrity: sha512-BT6w89Hqy7YKaWewYzmecXQzcJh6HTBbKYJIIkMaNU49DZ06LoTV3z32DWWEdUsgW6n1xTmwTLs4GtWrZC261w==}
 
   '@trpc/client@11.1.2':
     resolution: {integrity: sha512-RpifJOAv+ql9gF3oafa3dLCF01AzWu2DzejvehAPG2IlwHxopKoYXaImJ8zPwRkZokuWiKz5v65HjElmi8TlrQ==}
@@ -4843,6 +4855,14 @@ snapshots:
     dependencies:
       '@tanstack/query-core': 5.76.0
       react: 19.1.0
+
+  '@tanstack/react-virtual@3.13.8(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
+    dependencies:
+      '@tanstack/virtual-core': 3.13.8
+      react: 19.1.0
+      react-dom: 19.1.0(react@19.1.0)
+
+  '@tanstack/virtual-core@3.13.8': {}
 
   '@trpc/client@11.1.2(@trpc/server@11.1.2(typescript@5.8.3))(typescript@5.8.3)':
     dependencies:

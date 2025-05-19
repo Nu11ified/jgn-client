@@ -29,47 +29,74 @@ import * as authSchema from "@/server/db/schema/auth-schema";
  * @see https://trpc.io/docs/server/context
  */
 export const createTRPCContext = async (opts: { headers: Headers }) => {
-  const session = await auth.api.getSession({ headers: opts.headers });
-  let dbUser: typeof userSchema.users.$inferSelect | null = null;
 
-  const betterAuthUserId = session?.user?.id; // Using optional chaining
-
-  if (betterAuthUserId) {
-    const accountRecord = await db
-      .select()
-      .from(authSchema.account)
-      .where(
-        and(
-          eq(authSchema.account.userId, betterAuthUserId),
-          eq(authSchema.account.providerId, "discord")
-        )
-      )
-      .limit(1)
-      .then((res) => res[0]);
-
-    if (accountRecord?.accountId) { // Optional chaining for accountId
-      try {
-        // userSchema.users.discordId is { mode: "number" }, so compare with Number
-        const discordIdAsNumber = Number(accountRecord.accountId);
-        if (isNaN(discordIdAsNumber)) {
-          console.error("accountId from authSchema.account is not a valid number string:", accountRecord.accountId);
-        } else {
-          const userRecord = await db
-            .select()
-            .from(userSchema.users)
-            .where(eq(userSchema.users.discordId, discordIdAsNumber))
-            .limit(1)
-            .then((res) => res[0]);
-          if (userRecord) {
-            dbUser = userRecord;
-          }
-        }
-      } catch (e) {
-        console.error("Error converting/fetching user by discordId:", e);
-      }
-    }
+  let session: Awaited<ReturnType<typeof auth.api.getSession>> | null = null;
+  try {
+    session = await auth.api.getSession({ headers: opts.headers });
+    console.log("[createTRPCContext] auth.api.getSession result:", session);
+  } catch (error) {
+    console.error("[createTRPCContext] Error calling auth.api.getSession:", error);
+    // Potentially re-throw or handle, depending on desired behavior if session call fails
   }
 
+  let dbUser: typeof userSchema.users.$inferSelect | null = null;
+  const betterAuthUserId = session?.user?.id;
+  console.log("[createTRPCContext] betterAuthUserId:", betterAuthUserId);
+
+  if (betterAuthUserId) {
+    let accountRecord: typeof authSchema.account.$inferSelect | undefined = undefined;
+    try {
+      console.log("[createTRPCContext] Attempting to fetch accountRecord for userId:", betterAuthUserId);
+      accountRecord = await db
+        .select()
+        .from(authSchema.account)
+        .where(
+          and(
+            eq(authSchema.account.userId, betterAuthUserId),
+            eq(authSchema.account.providerId, "discord")
+          )
+        )
+        .limit(1)
+        .then((res) => res[0]);
+      console.log("[createTRPCContext] Fetched accountRecord:", accountRecord);
+    } catch (error) {
+      console.error("[createTRPCContext] Error fetching accountRecord from DB:", error);
+    }
+
+    if (accountRecord?.accountId) {
+      console.log("[createTRPCContext] accountRecord.accountId found:", accountRecord.accountId);
+      try {
+        const discordIdBigInt = BigInt(accountRecord.accountId);
+        console.log("[createTRPCContext] Attempting to fetch userRecord for discordIdBigInt:", discordIdBigInt);
+        
+        const userRecord = await db
+          .select()
+          .from(userSchema.users)
+          .where(eq(userSchema.users.discordId, discordIdBigInt))
+          .limit(1)
+          .then((res) => res[0]);
+        console.log("[createTRPCContext] Fetched userRecord:", userRecord);
+
+        if (userRecord) {
+          dbUser = userRecord;
+          console.log("[createTRPCContext] dbUser populated:", dbUser);
+        } else {
+          console.log("[createTRPCContext] No userRecord found for discordId:", discordIdBigInt);
+        }
+      } catch (e) {
+        console.error("[createTRPCContext] Error processing accountRecord.accountId or fetching userRecord:", e);
+        if (e instanceof Error && e.message.includes("Cannot convert")) {
+          console.error("[createTRPCContext] Potential BigInt conversion error for accountId:", accountRecord.accountId);
+        }
+      }
+    } else {
+      console.log("[createTRPCContext] No accountRecord.accountId found or accountRecord is undefined.");
+    }
+  } else {
+    console.log("[createTRPCContext] No betterAuthUserId provided or session is null.");
+  }
+
+  console.log("[createTRPCContext] Returning context with dbUser:", dbUser, "and session:", session);
   return {
     db,
     headers: opts.headers,

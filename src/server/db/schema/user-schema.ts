@@ -2,7 +2,7 @@ import { mysqlTable, bigint, varchar, char, boolean, timestamp, int, text, prima
 import { relations } from "drizzle-orm";
 
 export const users = mysqlTable("users", {
-    discordId: bigint("discord_id", { mode: "number" }).primaryKey().unique().notNull(),
+    discordId: bigint("discord_id", { mode: "bigint" }).primaryKey().unique().notNull(),
     username: varchar("username", { length: 255 }).notNull(),
     tsUid: char("ts_uid", { length: 28 }), // Assuming ascii and ascii_bin are handled by db collation
     apiKey: varchar("api_key", { length: 36 }).unique().notNull().default("(UUID())"), // UUID default might need a different approach in Drizzle/MySQL
@@ -12,14 +12,14 @@ export const users = mysqlTable("users", {
 });
 
 export const servers = mysqlTable("servers", {
-    serverId: bigint("server_id", { mode: "number" }).primaryKey().unique().notNull(),
+    serverId: bigint("server_id", { mode: "bigint" }).primaryKey().unique().notNull(),
     serverName: varchar("server_name", { length: 255 }).notNull(),
 });
 
 export const userServerMembership = mysqlTable("user_server_membership", {
     id: int("id").primaryKey().autoincrement(),
-    userDiscordId: bigint("user_discord_id", { mode: "number" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
-    serverId: bigint("server_id", { mode: "number" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
+    userDiscordId: bigint("user_discord_id", { mode: "bigint" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
+    serverId: bigint("server_id", { mode: "bigint" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
     isBanned: boolean("is_banned").default(false),
     joinedAt: timestamp("joined_at"),
     leftAt: timestamp("left_at"),
@@ -28,26 +28,26 @@ export const userServerMembership = mysqlTable("user_server_membership", {
 }));
 
 export const roles = mysqlTable("roles", {
-    roleId: bigint("role_id", { mode: "number" }).primaryKey().unique().notNull(),
+    roleId: bigint("role_id", { mode: "bigint" }).primaryKey().unique().notNull(),
     roleName: varchar("role_name", { length: 255 }).notNull(),
-    serverId: bigint("server_id", { mode: "number" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
+    serverId: bigint("server_id", { mode: "bigint" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
 });
 
 export const userServerRoles = mysqlTable("user_server_roles", {
     id: int("id").primaryKey().autoincrement(),
-    userDiscordId: bigint("user_discord_id", { mode: "number" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
-    serverId: bigint("server_id", { mode: "number" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
-    roleId: bigint("role_id", { mode: "number" }).notNull().references(() => roles.roleId, { onDelete: "cascade" }),
+    userDiscordId: bigint("user_discord_id", { mode: "bigint" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
+    serverId: bigint("server_id", { mode: "bigint" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
+    roleId: bigint("role_id", { mode: "bigint" }).notNull().references(() => roles.roleId, { onDelete: "cascade" }),
 }, (table) => ({
     uniqueUserServerRole: uniqueIndex("unique_user_server_role_idx").on(table.userDiscordId, table.serverId, table.roleId),
 }));
 
 export const banHistory = mysqlTable("ban_history", {
     id: int("id").primaryKey().autoincrement(),
-    userDiscordId: bigint("user_discord_id", { mode: "number" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
-    serverId: bigint("server_id", { mode: "number" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
+    userDiscordId: bigint("user_discord_id", { mode: "bigint" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
+    serverId: bigint("server_id", { mode: "bigint" }).notNull().references(() => servers.serverId, { onDelete: "cascade" }),
     bannedAt: timestamp("banned_at").defaultNow(),
-    bannedByUserId: bigint("banned_by_user_id", { mode: "number" }), // Self-reference or reference to users table? SQL implies users.
+    bannedByUserId: bigint("banned_by_user_id", { mode: "bigint" }), // Self-reference or reference to users table? SQL implies users.
     reason: text("reason"),
 });
 
@@ -58,14 +58,14 @@ export const teamspeakServerGroups = mysqlTable("teamspeak_server_groups", {
 
 export const userTeamspeakServerGroups = mysqlTable("user_teamspeak_server_groups", {
     id: int("id").primaryKey().autoincrement(),
-    userDiscordId: bigint("user_discord_id", { mode: "number" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
+    userDiscordId: bigint("user_discord_id", { mode: "bigint" }).notNull().references(() => users.discordId, { onDelete: "cascade" }),
     sgid: int("sgid").notNull().references(() => teamspeakServerGroups.sgid, { onDelete: "cascade" }),
 }, (table) => ({
     uniqueUserSgid: uniqueIndex("unique_user_sgid_idx").on(table.userDiscordId, table.sgid),
 }));
 
 export const discordRoleToTeamspeakGroupMapping = mysqlTable("discord_role_to_teamspeak_group_mapping", {
-    discordRoleId: bigint("discord_role_id", { mode: "number" }).primaryKey().unique().notNull().references(() => roles.roleId, { onDelete: "cascade" }),
+    discordRoleId: bigint("discord_role_id", { mode: "bigint" }).primaryKey().unique().notNull().references(() => roles.roleId, { onDelete: "cascade" }),
     teamspeakSgid: int("teamspeak_sgid").notNull().references(() => teamspeakServerGroups.sgid, { onDelete: "cascade" }),
 });
 

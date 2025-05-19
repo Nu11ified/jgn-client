@@ -13,7 +13,7 @@ interface UserInDB {
   ts_uid: string | null;
   is_moderator: boolean;
   is_admin: boolean;
-  discord_id: number;
+  discord_id: string;
   api_key: string;
   last_synced: string; // date-time
 }
@@ -51,7 +51,11 @@ export const userRouter = createTRPCRouter({
             headers: { "X-API-Key": ctx.dbUser.apiKey },
           }
         );
-        return response.data as UserInDB;
+        const user = response.data as UserInDB;
+        return {
+          ...user,
+          discordId: user.discord_id,
+        };
       } catch (error) {
         handleApiError(error, "getMe");
       }
@@ -64,12 +68,16 @@ export const userRouter = createTRPCRouter({
       try {
         const response = await axios.patch(
           `${API_BASE_URL}/profile/me/ts_uid`,
-          input, // requestBody is UserUpdateTsUid which matches the input schema
+          input,
           {
             headers: { "X-API-Key": ctx.dbUser.apiKey },
           }
         );
-        return response.data as UserInDB;
+        const user = response.data as UserInDB;
+        return {
+          ...user,
+          discordId: user.discord_id,
+        };
       } catch (error) {
         handleApiError(error, "updateMyTsUid");
       }

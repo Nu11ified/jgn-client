@@ -6,11 +6,15 @@
  * TL;DR - This is where all the tRPC server stuff is created and plugged in. The pieces you will
  * need to use are documented accordingly near the end.
  */
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
+import { eq, and } from "drizzle-orm";
 
 import { db } from "@/server/db";
+import { auth } from "@/lib/auth";
+import * as userSchema from "@/server/db/schema/user-schema";
+import * as authSchema from "@/server/db/schema/auth-schema";
 
 /**
  * 1. CONTEXT
@@ -25,9 +29,52 @@ import { db } from "@/server/db";
  * @see https://trpc.io/docs/server/context
  */
 export const createTRPCContext = async (opts: { headers: Headers }) => {
+  const session = await auth.api.getSession({ headers: opts.headers });
+  let dbUser: typeof userSchema.users.$inferSelect | null = null;
+
+  const betterAuthUserId = session?.user?.id; // Using optional chaining
+
+  if (betterAuthUserId) {
+    const accountRecord = await db
+      .select()
+      .from(authSchema.account)
+      .where(
+        and(
+          eq(authSchema.account.userId, betterAuthUserId),
+          eq(authSchema.account.providerId, "discord")
+        )
+      )
+      .limit(1)
+      .then((res) => res[0]);
+
+    if (accountRecord?.accountId) { // Optional chaining for accountId
+      try {
+        // userSchema.users.discordId is { mode: "number" }, so compare with Number
+        const discordIdAsNumber = Number(accountRecord.accountId);
+        if (isNaN(discordIdAsNumber)) {
+          console.error("accountId from authSchema.account is not a valid number string:", accountRecord.accountId);
+        } else {
+          const userRecord = await db
+            .select()
+            .from(userSchema.users)
+            .where(eq(userSchema.users.discordId, discordIdAsNumber))
+            .limit(1)
+            .then((res) => res[0]);
+          if (userRecord) {
+            dbUser = userRecord;
+          }
+        }
+      } catch (e) {
+        console.error("Error converting/fetching user by discordId:", e);
+      }
+    }
+  }
+
   return {
     db,
-    ...opts,
+    headers: opts.headers,
+    session, // better-auth session
+    dbUser,  // Your custom user record from userSchema.users (includes apiKey, isAdmin)
   };
 };
 
@@ -38,7 +85,10 @@ export const createTRPCContext = async (opts: { headers: Headers }) => {
  * ZodErrors so that you get typesafety on the frontend if your procedure fails due to validation
  * errors on the backend.
  */
-const t = initTRPC.context<typeof createTRPCContext>().create({
+// Infer the context type that will be used in procedures
+type Context = Awaited<ReturnType<typeof createTRPCContext>>;
+
+const t = initTRPC.context<Context>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
     return {
@@ -104,3 +154,40 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
  * are logged in.
  */
 export const publicProcedure = t.procedure.use(timingMiddleware);
+
+/**
+ * Protected procedure (authenticated users only)
+ * Ensures session and dbUser (with apiKey and discordId) are present in context.
+ */
+export const protectedProcedure = t.procedure.use(timingMiddleware).use(
+  async ({ ctx, next }) => {
+    if (!ctx.session || !ctx.dbUser) {
+      throw new TRPCError({ code: "UNAUTHORIZED" });
+    }
+    return next({
+      ctx: {
+        // Types are narrowed: session and dbUser are non-nullable
+        session: ctx.session,
+        dbUser: ctx.dbUser,
+        db: ctx.db,
+        headers: ctx.headers,
+      },
+    });
+  }
+);
+
+/**
+ * Admin procedure (admin users only)
+ * Ensures user is an admin and dbUser (with apiKey and discordId) is present.
+ */
+export const adminProcedure = protectedProcedure.use(
+  async ({ ctx, next }) => {
+    // ctx.dbUser is already guaranteed to be non-null by protectedProcedure
+    if (!ctx.dbUser.isAdmin) {
+      throw new TRPCError({ code: "FORBIDDEN" });
+    }
+    return next({
+      ctx, // Context is already correctly typed and populated by protectedProcedure
+    });
+  }
+);

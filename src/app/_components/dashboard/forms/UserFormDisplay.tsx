@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm, Controller, useFieldArray, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -42,6 +42,42 @@ interface UserFormDisplayProps {
   formId: number;
   responseIdToEdit?: number; // For editing drafts
 }
+
+// Add these utility functions at the top level
+const SUBMIT_COOLDOWN_MS = 30000; // 30 seconds between submissions
+const MAX_SUBMISSIONS_PER_HOUR = 10;
+const TYPING_SPEED_THRESHOLD_MS = 50; // Minimum time between keypresses for natural typing
+
+const getSubmissionHistory = () => {
+  try {
+    return JSON.parse(localStorage.getItem('form_submissions') ?? '[]') as number[];
+  } catch {
+    return [];
+  }
+};
+
+const addSubmissionTimestamp = () => {
+  const now = Date.now();
+  const history = getSubmissionHistory();
+  const newHistory = [...history, now].filter(time => time > now - 3600000); // Keep last hour
+  localStorage.setItem('form_submissions', JSON.stringify(newHistory));
+};
+
+const canSubmit = () => {
+  const history = getSubmissionHistory();
+  const now = Date.now();
+  const hourAgo = now - 3600000;
+  
+  // Clean old entries and count submissions in last hour
+  const recentSubmissions = history.filter(time => time > hourAgo);
+  
+  // Check if enough time has passed since last submission
+  const lastSubmission = recentSubmissions[recentSubmissions.length - 1] ?? 0;
+  const timeSinceLastSubmission = now - lastSubmission;
+  
+  return recentSubmissions.length < MAX_SUBMISSIONS_PER_HOUR && 
+         timeSinceLastSubmission > SUBMIT_COOLDOWN_MS;
+};
 
 export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDisplayProps) {
   const router = useRouter();
@@ -90,6 +126,10 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
   });
 
   const { fields, append, replace } = useFieldArray({ control, name: "answers" });
+
+  const [lastKeypressTime, setLastKeypressTime] = useState<number>(0);
+  const [typingTooFast, setTypingTooFast] = useState(false);
+  const [honeypotValue, setHoneypotValue] = useState('');
 
   useEffect(() => {
     if (formData?.questions) {
@@ -153,6 +193,12 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
   };
 
   const onSubmit: SubmitHandler<FormSubmissionValues> = (data) => {
+    // Check for spam indicators
+    if (honeypotValue || typingTooFast || !canSubmit()) {
+      toast.error("Please wait a moment before submitting again.");
+      return;
+    }
+
     const answersForApi = data.answers.map(ans => {
       let finalAnswer: string | boolean | string[];
       if (ans.type === "true_false") {
@@ -168,6 +214,8 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
         answer: finalAnswer,
       };
     }) as ServerFormAnswer[];
+
+    addSubmissionTimestamp();
     submitMutation.mutate({ formId, answers: answersForApi });
   };
 
@@ -192,6 +240,23 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
         saveDraftMutation.mutate({ formId, answers: answersForApi, responseId: responseIdToEdit });
     }
   };
+
+  // Add keypress monitoring for text inputs
+  const handleKeyPress = () => {
+    const now = Date.now();
+    if (lastKeypressTime && (now - lastKeypressTime) < TYPING_SPEED_THRESHOLD_MS) {
+      setTypingTooFast(true);
+    }
+    setLastKeypressTime(now);
+  };
+
+  // Reset typing speed flag after a delay
+  useEffect(() => {
+    if (typingTooFast) {
+      const timer = setTimeout(() => setTypingTooFast(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [typingTooFast]);
 
   if (isLoadingForm || (responseIdToEdit && isLoadingDraft)) {
     return (
@@ -249,14 +314,31 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
             <Controller
               name={fieldName}
               control={control}
-              render={({ field }) => <Input {...field} value={String(field.value ?? "")} placeholder="Your answer" maxLength={question.maxLength ?? undefined} />}
+              render={({ field }) => (
+                <Input 
+                  {...field} 
+                  value={String(field.value ?? "")} 
+                  placeholder="Your answer" 
+                  maxLength={question.maxLength ?? undefined}
+                  onKeyPress={handleKeyPress}
+                />
+              )}
             />
           )}
           {question.type === "long_answer" && (
             <Controller
               name={fieldName}
               control={control}
-              render={({ field }) => <Textarea {...field} value={String(field.value ?? "")} placeholder="Your detailed answer" rows={5} maxLength={question.maxLength ?? undefined} />}
+              render={({ field }) => (
+                <Textarea 
+                  {...field} 
+                  value={String(field.value ?? "")} 
+                  placeholder="Your detailed answer" 
+                  rows={5} 
+                  maxLength={question.maxLength ?? undefined}
+                  onKeyPress={handleKeyPress}
+                />
+              )}
             />
           )}
           {question.type === "multiple_choice" && (
@@ -311,6 +393,17 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
           {formData.description && <CardDescription className="mt-2 text-lg text-muted-foreground whitespace-pre-line">{formData.description}</CardDescription>}
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
+          {/* Honeypot field - hidden from real users */}
+          <input
+            type="text"
+            name="website"
+            value={honeypotValue}
+            onChange={(e) => setHoneypotValue(e.target.value)}
+            autoComplete="off"
+            style={{ display: 'none' }}
+            tabIndex={-1}
+            aria-hidden="true"
+          />
           <CardContent className="pt-8 space-y-6">
             {formData.questions.map((q, index) => renderQuestion(q, index))}
              {formData.questions.length === 0 && (

@@ -308,7 +308,7 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
             </Button>
           </div> 
           <CardTitle className="text-3xl font-bold tracking-tight">{formData.title}</CardTitle>
-          {formData.description && <CardDescription className="mt-2 text-lg text-muted-foreground">{formData.description}</CardDescription>}
+          {formData.description && <CardDescription className="mt-2 text-lg text-muted-foreground whitespace-pre-line">{formData.description}</CardDescription>}
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardContent className="pt-8 space-y-6">

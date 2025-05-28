@@ -456,16 +456,16 @@ export default function FormsAdmin() {
         </div>
 
         <Dialog open={isFormDialogOpen} onOpenChange={setIsFormDialogOpen}>
-            <DialogContent className="max-w-3xl">
+            <DialogContent className="w-full max-w-2xl mx-auto p-0">
                 <DialogHeader>
                     <DialogTitle>{editingForm ? "Edit Form" : "Create New Form"}</DialogTitle>
                     <DialogDescription>
                         {editingForm ? "Modify the details of this form." : "Fill in the details to create a new form."}
                     </DialogDescription>
                 </DialogHeader>
-                <form onSubmit={formMethods.handleSubmit(onSubmit)} className="space-y-4">
-                <ScrollArea className="h-[60vh] p-4 border rounded-md">
-                    <div className="space-y-4">
+                <form onSubmit={formMethods.handleSubmit(onSubmit)} className="space-y-4 w-full">
+                <ScrollArea className="h-[60vh] w-full p-4 border rounded-md overflow-x-hidden">
+                    <div className="space-y-4 w-full max-w-2xl mx-auto">
                         <div>
                             <Label htmlFor="title">Title</Label>
                             <Input id="title" {...formMethods.register("title")} />
@@ -517,14 +517,14 @@ export default function FormsAdmin() {
                                   return (
                                     <Card 
                                         key={item.id} 
-                                        className={`p-4 border rounded-lg shadow-sm transition-all duration-200 ease-in-out ${isEditingThisQuestion ? 'bg-background ring-2 ring-primary' : 'bg-muted/30 hover:bg-muted/50'}`}
+                                        className={`p-4 border rounded-lg shadow-sm transition-all duration-200 ease-in-out w-full break-words ${isEditingThisQuestion ? 'bg-background ring-2 ring-primary' : 'bg-muted/30 hover:bg-muted/50'}`}
                                         onClick={() => !isEditingThisQuestion && editQuestion(index)}
                                     >
                                         <div className="flex items-start gap-3">
                                             <div className="flex-grow space-y-1">
                                                 {!isEditingThisQuestion ? (
                                                     <div className="flex justify-between items-center cursor-pointer">
-                                                        <p className="font-medium truncate pr-2">
+                                                        <p className="font-medium break-all whitespace-pre-line pr-2" style={{ overflowWrap: 'anywhere' }}>
                                                             {index + 1}. {currentQuestionWatched?.text || <span className="italic text-muted-foreground">Untitled Question</span>}
                                                         </p>
                                                         <div className="flex items-center gap-2">

@@ -15,7 +15,8 @@ export const env = createEnv({
     BETTER_AUTH_URL: z.string().url(),
     DISCORD_CLIENT_ID: z.string(),
     DISCORD_CLIENT_SECRET: z.string(),
-    INTERNAL_API_URL: z.string().url()
+    INTERNAL_API_URL: z.string().url(),
+    PG_URL: z.string().url(),
   },
 
   /**
@@ -40,7 +41,8 @@ export const env = createEnv({
     NEXT_PUBLIC_URL: process.env.NEXT_PUBLIC_URL,
     DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID,
     DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
-    INTERNAL_API_URL: process.env.INTERNAL_API_URL
+    INTERNAL_API_URL: process.env.INTERNAL_API_URL,
+    PG_URL: process.env.PG_URL,
     // NEXT_PUBLIC_CLIENTVAR: process.env.NEXT_PUBLIC_CLIENTVAR,
   },
   /**

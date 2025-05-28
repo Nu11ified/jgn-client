@@ -203,7 +203,7 @@ const NavLink = ({ href, children }: { href: string; children: React.ReactNode }
     </Link>
 );
 
-const HeroHeader = () => {
+export const HeroHeader = () => {
     const [isMenuOpen, setIsMenuOpen] = React.useState(false);
     const { data: session, isPending: isSessionPending } = authClient.useSession();
 

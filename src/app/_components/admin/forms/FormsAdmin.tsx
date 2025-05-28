@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, PlusCircle, Trash2, Edit3, AlertTriangle, FileText, Settings2, Users, Eye, Info, ChevronDown, ChevronUp, GripVertical } from 'lucide-react';
+import { Loader2, PlusCircle, Trash2, Edit3, AlertTriangle, FileText, Settings2, Users, Eye, Info, ChevronDown, ChevronUp, GripVertical, X } from 'lucide-react';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { useFieldArray, useForm, Controller } from "react-hook-form";
@@ -98,6 +98,67 @@ const createDefaultQuestion = (id: string, type: FormQuestionType): ClientFormQu
       return { ...base, type: "true_false" };
   }
 };
+
+function RoleIdTagInput({ value, onChange, placeholder }: { value: string[]; onChange: (val: string[]) => void; placeholder?: string }) {
+  const [input, setInput] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const addRole = (role: string) => {
+    const trimmed = role.trim();
+    if (trimmed && !value.includes(trimmed)) {
+      onChange([...value, trimmed]);
+    }
+  };
+
+  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      if (input.trim()) {
+        addRole(input);
+        setInput("");
+      }
+    } else if (e.key === "Backspace" && !input && value.length > 0) {
+      // Remove last tag on backspace
+      onChange(value.slice(0, -1));
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (text.includes(",")) {
+      e.preventDefault();
+      text.split(",").map(s => s.trim()).filter(Boolean).forEach(addRole);
+      setInput("");
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border rounded px-2 py-1 min-h-[2.5rem] bg-background focus-within:ring-2 ring-primary">
+      {value.map((role, idx) => (
+        <span key={role + idx} className="flex items-center bg-muted rounded px-2 py-0.5 text-sm mr-1">
+          {role}
+          <button type="button" className="ml-1 text-muted-foreground hover:text-destructive" onClick={() => onChange(value.filter((_, i) => i !== idx))}>
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+      <input
+        ref={inputRef}
+        className="flex-1 min-w-[80px] border-none outline-none bg-transparent text-sm py-1"
+        value={input}
+        onChange={handleInput}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        placeholder={placeholder}
+        aria-label="Add role ID"
+      />
+    </div>
+  );
+}
 
 export default function FormsAdmin() {
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
@@ -584,52 +645,49 @@ export default function FormsAdmin() {
                             <CardHeader><CardTitle className="text-base">Access & Workflow</CardTitle></CardHeader>
                             <CardContent className="space-y-3">
                                 <div>
-                                    <Label htmlFor="accessRoleIds">Access Roles (Discord Role IDs, comma-separated)</Label>
+                                    <Label htmlFor="accessRoleIds">Access Roles (Discord Role IDs)</Label>
                                     <Controller
                                         name="accessRoleIds"
                                         control={formMethods.control}
                                         render={({ field }) => (
-                                            <Input 
-                                                id="accessRoleIds" 
-                                                value={(field.value ?? []).join(", ")}
-                                                onChange={e => field.onChange(e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
-                                                placeholder="e.g., 123,456"
+                                            <RoleIdTagInput
+                                                value={field.value ?? []}
+                                                onChange={field.onChange}
+                                                placeholder="Type a role ID and press Enter or comma"
                                             />
                                         )}
                                     />
                                     <p className="text-xs text-muted-foreground mt-1">Only users with these roles can submit. Leave empty for all.</p>
                                 </div>
                                 <div>
-                                    <Label htmlFor="reviewerRoleIds">Reviewer Roles (Discord Role IDs, comma-separated)</Label>
-                                     <Controller
+                                    <Label htmlFor="reviewerRoleIds">Reviewer Roles (Discord Role IDs)</Label>
+                                    <Controller
                                         name="reviewerRoleIds"
                                         control={formMethods.control}
                                         render={({ field }) => (
-                                            <Input 
-                                                id="reviewerRoleIds" 
-                                                value={(field.value ?? []).join(", ")}
-                                                onChange={e => field.onChange(e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
-                                                placeholder="e.g., 789,012"
+                                            <RoleIdTagInput
+                                                value={field.value ?? []}
+                                                onChange={field.onChange}
+                                                placeholder="Type a role ID and press Enter or comma"
                                             />
                                         )}
                                     />
                                     <p className="text-xs text-muted-foreground mt-1">Users with these roles can review submissions.</p>
                                 </div>
                                 <div>
-                                    <Label htmlFor="finalApproverRoleIds">Final Approver Roles (Discord Role IDs, comma-separated)</Label>
+                                    <Label htmlFor="finalApproverRoleIds">Final Approver Roles (Discord Role IDs)</Label>
                                     <Controller
                                         name="finalApproverRoleIds"
                                         control={formMethods.control}
                                         render={({ field }) => (
-                                            <Input 
-                                                id="finalApproverRoleIds" 
-                                                value={(field.value ?? []).join(", ")}
-                                                onChange={e => field.onChange(e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
-                                                placeholder="e.g., 345,678" 
+                                            <RoleIdTagInput
+                                                value={field.value ?? []}
+                                                onChange={field.onChange}
+                                                placeholder="Type a role ID and press Enter or comma"
                                             />
                                         )}
                                     />
-                                     <p className="text-xs text-muted-foreground mt-1">Users who can give final approval (if required).</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Users who can give final approval (if required).</p>
                                 </div>
                                 <div className="flex items-center space-x-4">
                                     <div className="flex-1">

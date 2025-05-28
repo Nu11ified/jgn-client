@@ -758,8 +758,6 @@ export default function FormsAdmin() {
                                     <TableHead>Title</TableHead>
                                     <TableHead>Category</TableHead>
                                     <TableHead>Questions</TableHead>
-                                    <TableHead>Access</TableHead>
-                                    <TableHead>Reviewers</TableHead>
                                     <TableHead className="text-right">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -769,8 +767,6 @@ export default function FormsAdmin() {
                                         <TableCell className="font-medium">{form.title}</TableCell>
                                         <TableCell>{categories.find(c => c.id === form.categoryId)?.name ?? "-"}</TableCell>
                                         <TableCell>{(form.questions as ServerFormQuestionDefinition[] | undefined)?.length ?? 0}</TableCell>
-                                        <TableCell className="text-xs">{(form.accessRoleIds)?.join(", ") ?? "All"}</TableCell>
-                                        <TableCell className="text-xs">{(form.reviewerRoleIds)?.join(", ") ?? "N/A"}</TableCell>
                                         <TableCell className="text-right">
                                             <Button variant="ghost" size="sm" onClick={() => openEditFormDialogCustom(form)} className="mr-1">
                                                 <Edit3 className="h-4 w-4" />

@@ -276,7 +276,7 @@ export default function FormResponsesAdmin() {
               {' '}on {formatDate(viewingResponse?.submittedAt)}
             </DialogDescription>
           </DialogHeader>
-          <ScrollArea className="flex-grow p-6 border-t border-b">
+          <ScrollArea className="flex-grow min-h-0 p-6 border-t border-b">
             {formDetailsForAnswersQuery.isLoading && (
                 <div className="flex flex-col items-center justify-center min-h-[200px] text-muted-foreground">
                     <Loader2 className="h-8 w-8 animate-spin text-primary mb-2" />

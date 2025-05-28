@@ -13,7 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ArrowRight, Loader2, Info, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowRight, Loader2, Info, CheckCircle, XCircle, ArrowLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 type FormResponseForFinalApprover = RouterOutputs["form"]["listFormResponsesForFinalApprover"]["items"][number];
@@ -61,20 +61,38 @@ const FinalApproverDashboardPage = () => {
 
   if (allResponses.length === 0) {
     return (
-      <div className="container mx-auto py-10 px-4 text-center">
-        <Info className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-        <p className="text-xl text-muted-foreground">No forms are currently awaiting your final approval.</p>
+      <div className="container mx-auto py-10 px-4">
+        <div className="flex items-center gap-4 mb-6">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/form">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back to Forms
+            </Link>
+          </Button>
+        </div>
+        <div className="text-center">
+          <Info className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+          <p className="text-xl text-muted-foreground">No forms are currently awaiting your final approval.</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="container mx-auto py-10 px-4">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Forms Awaiting Final Approval</h1>
-        <p className="text-muted-foreground mt-1">
-          The following form submissions have passed review and are awaiting your final decision.
-        </p>
+      <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center gap-4">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/form">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back to Forms
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Forms Awaiting Final Approval</h1>
+            <p className="text-muted-foreground mt-1">
+              The following form submissions have passed review and are awaiting your final decision.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="space-y-6">

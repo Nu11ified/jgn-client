@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { api, type RouterOutputs } from '@/trpc/react';
+import { api } from '@/trpc/react';
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,10 +13,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ArrowRight, Loader2, Info, Eye } from 'lucide-react';
+import { ArrowRight, ArrowLeft, Loader2, Info } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-
-type FormResponseForReviewer = RouterOutputs["form"]["listFormResponsesForReviewer"]["items"][number];
 
 const ReviewerDashboardPage = () => {
   const {
@@ -52,7 +50,7 @@ const ReviewerDashboardPage = () => {
         <Alert variant="destructive">
           <AlertTitle>Error Loading Forms</AlertTitle>
           <AlertDescription>
-            There was an issue fetching forms for review: {error.message}
+            There was an issue fetching forms: {error.message}
           </AlertDescription>
         </Alert>
       </div>
@@ -61,24 +59,42 @@ const ReviewerDashboardPage = () => {
 
   if (allResponses.length === 0) {
     return (
-      <div className="container mx-auto py-10 px-4 text-center">
-        <Info className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-        <p className="text-xl text-muted-foreground">No forms are currently awaiting your review.</p>
+      <div className="container mx-auto py-10 px-4">
+        <div className="flex items-center gap-4 mb-6">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/form">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back to Forms
+            </Link>
+          </Button>
+        </div>
+        <div className="text-center">
+          <Info className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+          <p className="text-xl text-muted-foreground">No forms are currently awaiting your review.</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="container mx-auto py-10 px-4">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Forms Awaiting Your Review</h1>
-        <p className="text-muted-foreground mt-1">
-          The following form submissions are pending your review.
-        </p>
+      <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center gap-4">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/form">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back to Forms
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Forms Awaiting Review</h1>
+            <p className="text-muted-foreground mt-1">
+              Review and provide feedback on submitted forms.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="space-y-6">
-        {allResponses.map((response: FormResponseForReviewer) => (
+        {allResponses.map((response) => (
           <Card key={response.responseId} className="shadow-sm hover:shadow-md transition-shadow">
             <CardHeader>
               <div className="flex justify-between items-start">
@@ -95,12 +111,11 @@ const ReviewerDashboardPage = () => {
               <p className="text-sm text-muted-foreground">
                 Submitted on: {new Date(response.submittedAt).toLocaleDateString()} at {new Date(response.submittedAt).toLocaleTimeString()}
               </p>
-              {/* Optionally, show number of prior reviews if relevant */}
             </CardContent>
             <CardFooter className="flex justify-end">
               <Button asChild>
-                <Link href={`/dashboard/form/reviewer/${response.responseId}`}>
-                  Review Submission <ArrowRight className="ml-2 h-4 w-4" />
+                <Link href={`/dashboard/form/reviewer/form/${response.responseId}`}>
+                  Review Form <ArrowRight className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
             </CardFooter>
@@ -109,16 +124,12 @@ const ReviewerDashboardPage = () => {
       </div>
 
       {hasNextPage && (
-        <div className="mt-8 flex justify-center">
+        <div className="mt-6 flex justify-center">
           <Button
-            onClick={() => void fetchNextPage()}
+            onClick={() => fetchNextPage()}
             disabled={isFetchingNextPage}
-            variant="outline"
           >
-            {isFetchingNextPage ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : null}
-            Load More
+            {isFetchingNextPage ? "Loading more..." : "Load More"}
           </Button>
         </div>
       )}

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Eye } from "lucide-react";
+import { Eye, ArrowLeft } from "lucide-react";
 import { formatDistanceToNow } from "date-fns"; // For relative dates
 
 // Helper to determine badge color based on status
@@ -58,7 +58,14 @@ export default function FinalApproverFormHistoryPage() {
   return (
     <div className="container mx-auto p-4">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Form Outcome History</h1>
+        <div className="flex items-center gap-4">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/form">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back to Forms
+            </Link>
+          </Button>
+          <h1 className="text-3xl font-bold tracking-tight">Form Outcome History</h1>
+        </div>
       </div>
 
       {allResponses.length === 0 && !isLoading ? (
@@ -95,13 +102,13 @@ export default function FinalApproverFormHistoryPage() {
                     : "N/A"}
                 </TableCell>
                  <TableCell>
-                  {response.updatedAt
-                    ? formatDistanceToNow(new Date(response.updatedAt), { addSuffix: true })
+                  {response.submittedAt
+                    ? formatDistanceToNow(new Date(response.submittedAt), { addSuffix: true })
                     : "N/A"}
                 </TableCell>
                 <TableCell className="text-right">
                   <Button variant="outline" size="sm" asChild>
-                    <Link href={`/dashboard/form/response/${response.id}`}>
+                    <Link href={`/dashboard/form/finalapprover/history/${response.id}`}>
                       <Eye className="mr-2 h-4 w-4" /> View Details
                     </Link>
                   </Button>

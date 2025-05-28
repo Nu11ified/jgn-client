@@ -662,10 +662,14 @@ export const formRouter = createTRPCRouter({
         }
         const isReviewer = hasRequiredRole(userRoleIds, formForResponse.reviewerRoleIds);
         const isFinalApprover = hasRequiredRole(userRoleIds, formForResponse.finalApproverRoleIds);
+        
+        // Allow reviewers to view responses in pending_review status
         if (response.status === formResponseStatusEnum.enum.pending_review && isReviewer) {
           canView = true;
         }
-        if (response.status === formResponseStatusEnum.enum.pending_approval && isFinalApprover) {
+        
+        // Allow final approvers to view any response for forms where they have the final approver role
+        if (isFinalApprover) {
           canView = true;
         }
       }
@@ -1068,173 +1072,126 @@ export const formRouter = createTRPCRouter({
     .input(
       z.object({
         limit: z.number().min(1).max(50).default(20),
-        cursor: z.string().optional(), // response ID as cursor
-        // Optional filters could be added here, e.g., for specific formId or status
+        cursor: z.number().optional(), // response ID as cursor
       })
     )
     .query(async ({ ctx, input }) => {
       if (!ctx.dbUser?.discordId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "User Discord ID not found." });
       }
-      const userDiscordId = ctx.dbUser.discordId;
-      const userRoleIds = await getAllUserRoleIds(userDiscordId);
 
-      if (userRoleIds.length === 0) {
-        // If user has no roles, they cannot be a final approver for any forms requiring roles.
-        // We could technically still search for forms where finalApproverRoleIds is empty/null,
-        // but typically final approvers are role-based.
-        // For now, if they have no roles, they see no forms. This can be adjusted if needed.
-        return { items: [], nextCursor: undefined };
-      }
-      
-      // Step 1: Find forms where the user is a final approver
-      const relevantForms = await postgrestDb
-        .select({ id: forms.id })
-        .from(forms)
-        .where(
-          and(
-            drizzleSql`${forms.finalApproverRoleIds} && ARRAY[${drizzleSql.join(userRoleIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::varchar[]`,
-            isNull(forms.deletedAt)
-          )
-        )
+      // Get user's roles from MySQL database
+      const userRoles = await db
+        .select({ roleId: userServerRoles.roleId })
+        .from(userServerRoles)
+        .where(eq(userServerRoles.userDiscordId, ctx.dbUser.discordId))
         .execute();
 
-      const relevantFormIds = relevantForms.map(f => f.id);
+      const userRoleIds = userRoles.map(r => String(r.roleId));
 
-      if (relevantFormIds.length === 0) {
+      if (userRoleIds.length === 0) {
         return { items: [], nextCursor: undefined };
       }
 
-      // Step 2: Fetch responses for these forms, excluding drafts
+      // Build conditions for the query
       const conditions = [
-        inArray(formResponses.formId, relevantFormIds),
-        drizzleSql`${formResponses.status} != '${formResponseStatusEnum.enum.draft}'`,
+        drizzleSql`${forms.finalApproverRoleIds} && ARRAY[${drizzleSql.join(userRoleIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::varchar[]`,
+        drizzleSql`${forms.deletedAt} IS NULL`,
+        drizzleSql`${formResponses.status} != ${formResponseStatusEnum.enum.draft}`,
       ];
 
       if (input.cursor) {
-        const cursorItem = await postgrestDb.query.formResponses.findFirst({
-          where: eq(formResponses.id, parseInt(input.cursor, 10)),
-          columns: { submittedAt: true, id: true }
-        });
-        if (cursorItem?.submittedAt) {
-          conditions.push(
-            drizzleSql`(${formResponses.submittedAt} < ${cursorItem.submittedAt}) OR 
-                       (${formResponses.submittedAt} = ${cursorItem.submittedAt} AND ${formResponses.id} < ${cursorItem.id})`
-          );
-        }
+        conditions.push(drizzleSql`${formResponses.id} < ${input.cursor}`);
       }
-      
-      const responseItems = await postgrestDb.query.formResponses.findMany({
-        where: and(...conditions),
-        orderBy: (responses, { desc: d }) => [d(responses.submittedAt), d(responses.id)],
-        limit: input.limit + 1,
-        with: {
-          form: { // Include basic form info as it's often useful
-            columns: { id: true, title: true, description: true }
-          }
-        }
+
+      // Get form responses with form details
+      const responses = await postgrestDb
+        .select({
+          id: formResponses.id,
+          formId: formResponses.formId,
+          userId: formResponses.userId,
+          status: formResponses.status,
+          submittedAt: formResponses.submittedAt,
+          reviewerDecisions: formResponses.reviewerDecisions,
+          reviewersApprovedCount: formResponses.reviewersApprovedCount,
+          reviewersDeniedCount: formResponses.reviewersDeniedCount,
+          finalApproverId: formResponses.finalApproverId,
+          finalApprovalDecision: formResponses.finalApprovalDecision,
+          finalApprovedAt: formResponses.finalApprovedAt,
+          finalApprovalComments: formResponses.finalApprovalComments,
+          form: {
+            id: forms.id,
+            title: forms.title,
+            description: forms.description,
+          },
+        })
+        .from(formResponses)
+        .innerJoin(forms, eq(formResponses.formId, forms.id))
+        .where(and(...conditions))
+        .orderBy(desc(formResponses.id))
+        .limit(input.limit + 1)
+        .execute();
+
+      // Handle pagination
+      let nextCursor: number | undefined;
+      if (responses.length > input.limit) {
+        const nextItem = responses.pop();
+        nextCursor = nextItem?.id;
+      }
+
+      // Get all unique user IDs from responses
+      const userIds = new Set<string>();
+      responses.forEach(response => {
+        if (response.userId) userIds.add(response.userId);
+        if (response.finalApproverId) userIds.add(response.finalApproverId);
+        response.reviewerDecisions?.forEach(decision => {
+          if (decision.userId) userIds.add(decision.userId);
+        });
       });
 
-      let nextCursor: string | undefined = undefined;
-      if (responseItems.length > input.limit) {
-        const nextItem = responseItems.pop();
-        if (nextItem) {
-          nextCursor = nextItem.id.toString();
-        }
-      }
+      // Get user details from auth and user tables
+      const userDetails = await db
+        .select({
+          userId: authAccount.userId,
+          discordId: authAccount.accountId,
+          username: users.username,
+        })
+        .from(authAccount)
+        .innerJoin(users, eq(users.discordId, drizzleSql`CAST(${authAccount.accountId} AS UNSIGNED)`) )
+        .where(inArray(authAccount.userId, Array.from(userIds)))
+        .execute();
 
-      // Step 3: Augment with user details (similar to listResponsesForForm)
-      const jwtSubIds = new Set<string>();
-      responseItems.forEach(item => {
-        if (item.userId) jwtSubIds.add(item.userId);
-        if (item.finalApproverId) jwtSubIds.add(item.finalApproverId);
-        item.reviewerDecisions?.forEach(decision => {
-          if (decision.userId) jwtSubIds.add(decision.userId);
-        });
-      });
+      // Create a map of user details
+      const userDetailsMap = new Map(
+        userDetails.map(detail => [detail.userId, {
+          discordId: detail.discordId,
+          fullName: detail.username,
+        }])
+      );
 
-      const finalUserDetailsMap = new Map<string, { fullName?: string | null; discordId?: string | null }>();
-
-      if (jwtSubIds.size > 0) {
-        const accountInfos = await db
-          .select({
-            userId: authAccount.userId, // JWT Sub ID
-            discordAccountId: authAccount.accountId, // Discord ID (string)
-          })
-          .from(authAccount)
-          .where(inArray(authAccount.userId, Array.from(jwtSubIds)))
-          .execute();
-
-        const jwtSubToDiscordIdMap = new Map<string, string>();
-        accountInfos.forEach(acc => {
-          if (acc.discordAccountId) {
-            jwtSubToDiscordIdMap.set(acc.userId, acc.discordAccountId);
-          }
-        });
+      // Augment responses with user details
+      const augmentedResponses = responses.map(response => {
+        const submitter = userDetailsMap.get(response.userId);
+        const finalApprover = response.finalApproverId ? userDetailsMap.get(response.finalApproverId) : undefined;
         
-        const discordIdStrings = Array.from(jwtSubToDiscordIdMap.values());
-        const discordIdsToFetch = discordIdStrings.map(id => BigInt(id)).filter(id => !isNaN(Number(id)));
-
-        if (discordIdsToFetch.length > 0) {
-          const userSchemaDetails = await db
-            .select({
-              retrievedDiscordId: users.discordId, // bigint
-              username: users.username, // string (fullName)
-            })
-            .from(users)
-            .where(inArray(users.discordId, discordIdsToFetch))
-            .execute();
-
-          const discordIdToUsernameMap = new Map<string, string>();
-          userSchemaDetails.forEach(ud => {
-            discordIdToUsernameMap.set(String(ud.retrievedDiscordId), ud.username ?? 'Unknown User');
-          });
-
-          jwtSubToDiscordIdMap.forEach((discordIdStr, jwtSub) => {
-            const username = discordIdToUsernameMap.get(discordIdStr);
-            finalUserDetailsMap.set(jwtSub, {
-              fullName: username,
-              discordId: discordIdStr,
-            });
-          });
-        }
-      }
-
-      const augmentedItems = responseItems.map(item => {
-        const submitterDetails = item.userId ? finalUserDetailsMap.get(item.userId) : undefined;
-        const finalApproverDetails = item.finalApproverId ? finalUserDetailsMap.get(item.finalApproverId) : undefined;
-
-        const augmentedReviewerDecisions = item.reviewerDecisions?.map(decision => {
-          const reviewerDetails = decision.userId ? finalUserDetailsMap.get(decision.userId) : undefined;
-          return {
-            ...decision,
-            reviewerFullName: reviewerDetails?.fullName ?? decision.reviewerName,
-            reviewerDiscordId: reviewerDetails?.discordId,
-          };
-        });
-        
-        // Ensure 'form' is included in the return type if it was fetched with 'with'
-        // The type PgFormResponse may not include 'form' by default unless explicitly typed.
-        // Here, we cast it to ensure the structure is what the client expects.
-        const formDetails = item.form as {id: number; title: string | null; description: string | null;} | undefined;
-
+        const augmentedReviewerDecisions = response.reviewerDecisions?.map(decision => ({
+          ...decision,
+          reviewerFullName: userDetailsMap.get(decision.userId)?.fullName ?? decision.reviewerName,
+          reviewerDiscordId: userDetailsMap.get(decision.userId)?.discordId,
+        }));
 
         return {
-          ...item,
-          form: formDetails, // Add form details here
-          submitterFullName: submitterDetails?.fullName,
-          submitterDiscordId: submitterDetails?.discordId,
-          finalApproverFullName: finalApproverDetails?.fullName,
-          finalApproverDiscordId: finalApproverDetails?.discordId,
+          ...response,
+          submitterFullName: submitter?.fullName,
+          submitterDiscordId: submitter?.discordId,
+          finalApproverFullName: finalApprover?.fullName,
+          finalApproverDiscordId: finalApprover?.discordId,
           reviewerDecisions: augmentedReviewerDecisions,
         };
       });
-      
-      // Define an explicit type for the items being returned if needed for clarity
-      // or to help TypeScript inference on the client side.
-      // For example: type AugmentedFinalApproverResponse = typeof augmentedItems[0];
+
       return {
-        items: augmentedItems, // as AugmentedFinalApproverResponse[],
+        items: augmentedResponses,
         nextCursor,
       };
     }),

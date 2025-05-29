@@ -351,7 +351,7 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
                     <div key={optIndex} className="flex items-center space-x-2">
                       <Checkbox 
                         id={`${questionIdStr}-opt-${optIndex}`}
-                        checked={question.allowMultiple ? (Array.isArray(field.value) && (field.value as string[]).includes(option)) : field.value === option}
+                        checked={question.allowMultiple ? (Array.isArray(field.value) && (field.value as string[]).includes(option)) : (Array.isArray(field.value) && (field.value as string[]).includes(option))}
                         onCheckedChange={(checked) => {
                           if (question.allowMultiple) {
                             const currentVal = Array.isArray(field.value) ? field.value as string[] : [];
@@ -361,7 +361,15 @@ export default function UserFormDisplay({ formId, responseIdToEdit }: UserFormDi
                               field.onChange(currentVal.filter((item: string) => item !== option));
                             }
                           } else {
-                            field.onChange(checked ? option : undefined);
+                            // For single choice, still maintain array structure but only allow one item
+                            const currentVal = Array.isArray(field.value) ? field.value as string[] : [];
+                            if (checked) {
+                              // For single choice, replace any existing selection with this option
+                              field.onChange([option]);
+                            } else {
+                              // Remove this option if it was selected
+                              field.onChange(currentVal.filter((item: string) => item !== option));
+                            }
                           }
                         }}
                       />

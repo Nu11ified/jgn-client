@@ -331,15 +331,24 @@ export const formRouter = createTRPCRouter({
         newDeniedCount++;
       }
 
-      let newStatus: FormResponseStatus = currentResponseStatus; // Initialize with current status
+      let newStatus: FormResponseStatus = currentResponseStatus;
       const requiredReviewers = responseToReview.form.requiredReviewers;
+      const totalReviewsSubmitted = newApprovedCount + newDeniedCount;
 
-      if (newDeniedCount > 0 && requiredReviewers > 0) {
-        newStatus = formResponseStatusEnum.enum.denied_by_review;
-      } else if (newApprovedCount >= requiredReviewers) {
+      if (requiredReviewers === 0) {
         newStatus = responseToReview.form.requiresFinalApproval
           ? formResponseStatusEnum.enum.pending_approval
           : formResponseStatusEnum.enum.approved;
+      } else if (totalReviewsSubmitted >= requiredReviewers) {
+        if (newApprovedCount > newDeniedCount) {
+          newStatus = responseToReview.form.requiresFinalApproval
+            ? formResponseStatusEnum.enum.pending_approval
+            : formResponseStatusEnum.enum.approved;
+        } else {
+          newStatus = formResponseStatusEnum.enum.denied_by_review;
+        }
+      } else {
+        newStatus = formResponseStatusEnum.enum.pending_review;
       }
 
       const result = await postgrestDb

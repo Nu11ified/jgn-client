@@ -29,7 +29,7 @@ import { user as authUser, account as authAccount } from "@/server/db/schema/aut
 import { TRPCError } from "@trpc/server";
 import { and, eq, sql as drizzleSql, count, desc, getTableColumns, isNull, inArray } from "drizzle-orm"; 
 
-// Updated to fetch all roles for a user, irrespective of serverId
+// Updated to fetch all roles for a user, irrespective of serverIds
 async function getAllUserRoleIds(userDiscordId: bigint): Promise<string[]> {
   const userRolesResult = await db
     .select({ roleId: userServerRoles.roleId })

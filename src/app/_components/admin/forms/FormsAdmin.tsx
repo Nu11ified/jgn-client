@@ -661,9 +661,6 @@ export default function FormsAdmin() {
                                                 {!isEditingThisQuestion ? (
                                                     <div className="flex justify-between items-center cursor-pointer">
                                                         <div className="flex items-center gap-2">
-                                                            {editingForm && (
-                                                                <GripVertical className="h-4 w-4 text-muted-foreground" />
-                                                            )}
                                                             <p className="font-medium break-all whitespace-pre-line pr-2" style={{ overflowWrap: 'anywhere' }}>
                                                                 {index + 1}. {currentQuestionWatched?.text || <span className="italic text-muted-foreground">Untitled Question</span>}
                                                             </p>

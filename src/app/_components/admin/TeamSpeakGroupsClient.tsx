@@ -114,9 +114,17 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
     count: filteredGroups?.length ?? 0,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
-    overscan: 10, 
+    overscan: 10,
+    measureElement: typeof window !== 'undefined' 
+      ? (element) => element?.getBoundingClientRect().height || ESTIMATED_ROW_HEIGHT
+      : undefined,
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
+  const totalHeight = rowVirtualizer.getTotalSize();
+  const paddingTop = virtualItems.length > 0 ? virtualItems?.[0]?.start ?? 0 : 0;
+  const paddingBottom = virtualItems.length > 0 
+    ? totalHeight - (virtualItems?.[virtualItems.length - 1]?.end ?? 0)
+    : 0;
   const isLoadingUiForInitialData = isFetchingAll && allFetchedGroups.length === 0 && !fetchingError;
   if (isLoadingUiForInitialData) {
     return (
@@ -190,7 +198,7 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
         </div>
         <div ref={parentRef} className="h-[500px] overflow-auto border rounded-md">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 bg-background z-10">
               <TableRow>
                 <TableHead>Group Name</TableHead>
                 <TableHead>SGID</TableHead>
@@ -204,16 +212,30 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
                   </TableCell>
                 </TableRow>
               )}
+              {paddingTop > 0 && (
+                <tr>
+                  <td style={{ height: `${paddingTop}px` }} />
+                </tr>
+              )}
               {virtualItems.map(virtualRow => {
                 const group = filteredGroups[virtualRow.index];
                 if (!group) return null;
                 return (
-                  <TableRow key={group.sgid} style={{ height: `${virtualRow.size}px` }}>
+                  <TableRow 
+                    key={group.sgid}
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
+                  >
                     <TableCell>{group.name}</TableCell>
                     <TableCell>{group.sgid}</TableCell>
                   </TableRow>
                 );
               })}
+              {paddingBottom > 0 && (
+                <tr>
+                  <td style={{ height: `${paddingBottom}px` }} />
+                </tr>
+              )}
             </TableBody>
           </Table>
         </div>

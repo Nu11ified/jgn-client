@@ -114,9 +114,17 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
     count: filteredRoles?.length ?? 0,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
-    overscan: 10, 
+    overscan: 10,
+    measureElement: typeof window !== 'undefined' 
+      ? (element) => element?.getBoundingClientRect().height || ESTIMATED_ROW_HEIGHT
+      : undefined,
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
+  const totalHeight = rowVirtualizer.getTotalSize();
+  const paddingTop = virtualItems.length > 0 ? virtualItems?.[0]?.start ?? 0 : 0;
+  const paddingBottom = virtualItems.length > 0 
+    ? totalHeight - (virtualItems?.[virtualItems.length - 1]?.end ?? 0)
+    : 0;
   const isLoadingUiForInitialData = isFetchingAll && allFetchedRoles.length === 0 && !fetchingError;
   if (isLoadingUiForInitialData) {
     return (
@@ -190,7 +198,7 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
         </div>
         <div ref={parentRef} className="h-[500px] overflow-auto border rounded-md">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 bg-background z-10">
               <TableRow>
                 <TableHead>Role Name</TableHead>
                 <TableHead>Role ID</TableHead>
@@ -205,17 +213,31 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
                   </TableCell>
                 </TableRow>
               )}
+              {paddingTop > 0 && (
+                <tr>
+                  <td style={{ height: `${paddingTop}px` }} />
+                </tr>
+              )}
               {virtualItems.map(virtualRow => {
                 const role = filteredRoles[virtualRow.index];
                 if (!role) return null;
                 return (
-                  <TableRow key={role.role_id} style={{ height: `${virtualRow.size}px` }}>
+                  <TableRow 
+                    key={role.role_id}
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
+                  >
                     <TableCell>{role.role_name}</TableCell>
                     <TableCell>{role.role_id}</TableCell>
                     <TableCell>{role.server_id}</TableCell>
                   </TableRow>
                 );
               })}
+              {paddingBottom > 0 && (
+                <tr>
+                  <td style={{ height: `${paddingBottom}px` }} />
+                </tr>
+              )}
             </TableBody>
           </Table>
         </div>

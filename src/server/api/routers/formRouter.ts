@@ -184,6 +184,332 @@ export const formRouter = createTRPCRouter({
       return { success: true, formId: input.formId };
     }),
 
+  // -------------------- QUESTION REORDERING --------------------
+  
+  // Move a question up one position
+  moveQuestionUp: adminProcedure
+    .input(z.object({ 
+      formId: z.number().int(),
+      questionIndex: z.number().int().min(0)
+    }))
+    .mutation(async ({ input }) => {
+      const [form] = await postgrestDb
+        .select({ questions: forms.questions })
+        .from(forms)
+        .where(and(eq(forms.id, input.formId), isNull(forms.deletedAt)))
+        .limit(1).execute();
+
+      if (!form) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Form not found or has been deleted.",
+        });
+      }
+
+      const questions = [...form.questions];
+      const { questionIndex } = input;
+
+      if (questionIndex === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Question is already at the top.",
+        });
+      }
+
+      if (questionIndex >= questions.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid question index.",
+        });
+      }
+
+      // Swap with previous question
+      [questions[questionIndex - 1], questions[questionIndex]] = [questions[questionIndex]!, questions[questionIndex - 1]!];
+
+      const result = await postgrestDb
+        .update(forms)
+        .set({ questions })
+        .where(eq(forms.id, input.formId))
+        .returning()
+        .execute();
+
+      return { success: true, updatedForm: result[0] };
+    }),
+
+  // Move a question down one position  
+  moveQuestionDown: adminProcedure
+    .input(z.object({
+      formId: z.number().int(),
+      questionIndex: z.number().int().min(0)
+    }))
+    .mutation(async ({ input }) => {
+      const [form] = await postgrestDb
+        .select({ questions: forms.questions })
+        .from(forms)
+        .where(and(eq(forms.id, input.formId), isNull(forms.deletedAt)))
+        .limit(1).execute();
+
+      if (!form) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Form not found or has been deleted.",
+        });
+      }
+
+      const questions = [...form.questions];
+      const { questionIndex } = input;
+
+      if (questionIndex >= questions.length - 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Question is already at the bottom.",
+        });
+      }
+
+      if (questionIndex < 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid question index.",
+        });
+      }
+
+      // Swap with next question
+      [questions[questionIndex], questions[questionIndex + 1]] = [questions[questionIndex + 1]!, questions[questionIndex]!];
+
+      const result = await postgrestDb
+        .update(forms)
+        .set({ questions })
+        .where(eq(forms.id, input.formId))
+        .returning()
+        .execute();
+
+      return { success: true, updatedForm: result[0] };
+    }),
+
+  // Move a question to the top
+  moveQuestionToTop: adminProcedure
+    .input(z.object({
+      formId: z.number().int(),
+      questionIndex: z.number().int().min(0)
+    }))
+    .mutation(async ({ input }) => {
+      const [form] = await postgrestDb
+        .select({ questions: forms.questions })
+        .from(forms)
+        .where(and(eq(forms.id, input.formId), isNull(forms.deletedAt)))
+        .limit(1).execute();
+
+      if (!form) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Form not found or has been deleted.",
+        });
+      }
+
+      const questions = [...form.questions];
+      const { questionIndex } = input;
+
+      if (questionIndex === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Question is already at the top.",
+        });
+      }
+
+      if (questionIndex >= questions.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid question index.",
+        });
+      }
+
+      // Remove question from current position and insert at top
+      const [questionToMove] = questions.splice(questionIndex, 1);
+      questions.unshift(questionToMove!);
+
+      const result = await postgrestDb
+        .update(forms)
+        .set({ questions })
+        .where(eq(forms.id, input.formId))
+        .returning()
+        .execute();
+
+      return { success: true, updatedForm: result[0] };
+    }),
+
+  // Move a question to the bottom
+  moveQuestionToBottom: adminProcedure
+    .input(z.object({
+      formId: z.number().int(),
+      questionIndex: z.number().int().min(0)
+    }))
+    .mutation(async ({ input }) => {
+      const [form] = await postgrestDb
+        .select({ questions: forms.questions })
+        .from(forms)
+        .where(and(eq(forms.id, input.formId), isNull(forms.deletedAt)))
+        .limit(1).execute();
+
+      if (!form) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Form not found or has been deleted.",
+        });
+      }
+
+      const questions = [...form.questions];
+      const { questionIndex } = input;
+
+      if (questionIndex >= questions.length - 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Question is already at the bottom.",
+        });
+      }
+
+      if (questionIndex < 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid question index.",
+        });
+      }
+
+      // Remove question from current position and insert at bottom
+      const [questionToMove] = questions.splice(questionIndex, 1);
+      questions.push(questionToMove!);
+
+      const result = await postgrestDb
+        .update(forms)
+        .set({ questions })
+        .where(eq(forms.id, input.formId))
+        .returning()
+        .execute();
+
+      return { success: true, updatedForm: result[0] };
+    }),
+
+  // Move a question to a specific position
+  moveQuestionToPosition: adminProcedure
+    .input(z.object({
+      formId: z.number().int(),
+      fromIndex: z.number().int().min(0),
+      toIndex: z.number().int().min(0)
+    }))
+    .mutation(async ({ input }) => {
+      const [form] = await postgrestDb
+        .select({ questions: forms.questions })
+        .from(forms)
+        .where(and(eq(forms.id, input.formId), isNull(forms.deletedAt)))
+        .limit(1).execute();
+
+      if (!form) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Form not found or has been deleted.",
+        });
+      }
+
+      const questions = [...form.questions];
+      const { fromIndex, toIndex } = input;
+
+      if (fromIndex < 0 || fromIndex >= questions.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid fromIndex.",
+        });
+      }
+
+      if (toIndex < 0 || toIndex >= questions.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid toIndex.",
+        });
+      }
+
+      if (fromIndex === toIndex) {
+        return { success: true, message: "Question is already at the target position." };
+      }
+
+      // Remove question from current position
+      const [questionToMove] = questions.splice(fromIndex, 1);
+      // Insert at new position
+      questions.splice(toIndex, 0, questionToMove!);
+
+      const result = await postgrestDb
+        .update(forms)
+        .set({ questions })
+        .where(eq(forms.id, input.formId))
+        .returning()
+        .execute();
+
+      return { success: true, updatedForm: result[0] };
+    }),
+
+  // Reorder multiple questions at once (for drag-and-drop interfaces)
+  reorderQuestions: adminProcedure
+    .input(z.object({
+      formId: z.number().int(),
+      newOrder: z.array(z.string()) // Array of question IDs in the new order
+    }))
+    .mutation(async ({ input }) => {
+      const [form] = await postgrestDb
+        .select({ questions: forms.questions })
+        .from(forms)
+        .where(and(eq(forms.id, input.formId), isNull(forms.deletedAt)))
+        .limit(1).execute();
+
+      if (!form) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Form not found or has been deleted.",
+        });
+      }
+
+      const questions = [...form.questions];
+      const { newOrder } = input;
+
+      // Validate that all question IDs exist and count matches
+      const existingQuestionIds = questions.map(q => q.id);
+      const uniqueNewOrderIds = [...new Set(newOrder)];
+      
+      if (uniqueNewOrderIds.length !== questions.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "New order must contain exactly the same number of questions.",
+        });
+      }
+
+      for (const questionId of newOrder) {
+        if (!existingQuestionIds.includes(questionId)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Question ID ${questionId} not found in form.`,
+          });
+        }
+      }
+
+      // Reorder questions based on the new order
+      const reorderedQuestions = newOrder.map(questionId => {
+        const question = questions.find(q => q.id === questionId);
+        if (!question) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Failed to find question with ID ${questionId}.`,
+          });
+        }
+        return question;
+      });
+
+      const result = await postgrestDb
+        .update(forms)
+        .set({ questions: reorderedQuestions })
+        .where(eq(forms.id, input.formId))
+        .returning()
+        .execute();
+
+      return { success: true, updatedForm: result[0] };
+    }),
+
   // -------------------- PROTECTED PROCEDURES (USER FACING) --------------------
   submitResponse: protectedProcedure
     .input(z.object({ formId: z.number().int(), answers: z.array(formAnswerSchema) }))

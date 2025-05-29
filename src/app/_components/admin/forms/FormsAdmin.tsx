@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, PlusCircle, Trash2, Edit3, AlertTriangle, FileText, Settings2, Users, Eye, Info, ChevronDown, ChevronUp, GripVertical, X } from 'lucide-react';
+import { Loader2, PlusCircle, Trash2, Edit3, AlertTriangle, FileText, Settings2, Users, Eye, Info, ChevronDown, ChevronUp, GripVertical, X, ArrowUp, ArrowDown, MoveUp, MoveDown } from 'lucide-react';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { useFieldArray, useForm, Controller } from "react-hook-form";
@@ -236,6 +236,142 @@ export default function FormsAdmin() {
       setFormToDelete(null);
     }
   });
+
+  // Question reordering mutations
+  const moveQuestionUpMutation = api.form.moveQuestionUp.useMutation({
+    onSuccess: (data) => {
+      toast.success("Question moved up!");
+      if (editingForm && data.updatedForm) {
+        // Update the local form state with the reordered questions
+        const updatedQuestions = data.updatedForm.questions.map((q): ClientFormQuestion => {
+          const id = q.id.toString();
+          const text = q.text;
+          switch (q.type) {
+            case "multiple_choice":
+              return { 
+                id, text, type: "multiple_choice", 
+                options: q.options ?? [], 
+                allowMultiple: q.allowMultiple ?? false 
+              };
+            case "short_answer":
+              return { 
+                id, text, type: "short_answer", 
+                maxLength: q.maxLength ?? undefined
+              };
+            case "long_answer":
+              return { 
+                id, text, type: "long_answer", 
+                supportsMarkdown: q.supportsMarkdown ?? false, 
+                maxLength: q.maxLength ?? undefined
+              };
+            case "true_false":
+            default:
+              return { id, text, type: "true_false" };
+          }
+        });
+        formMethods.setValue("questions", updatedQuestions);
+      }
+    },
+    onError: (error) => toast.error(`Failed to move question up: ${error.message}`),
+  });
+
+  const moveQuestionDownMutation = api.form.moveQuestionDown.useMutation({
+    onSuccess: (data) => {
+      toast.success("Question moved down!");
+      if (editingForm && data.updatedForm) {
+        // Update the local form state with the reordered questions
+        const updatedQuestions = data.updatedForm.questions.map((q): ClientFormQuestion => {
+          const id = q.id.toString();
+          const text = q.text;
+          switch (q.type) {
+            case "multiple_choice":
+              return { 
+                id, text, type: "multiple_choice", 
+                options: q.options ?? [], 
+                allowMultiple: q.allowMultiple ?? false 
+              };
+            case "short_answer":
+              return { 
+                id, text, type: "short_answer", 
+                maxLength: q.maxLength ?? undefined
+              };
+            case "long_answer":
+              return { 
+                id, text, type: "long_answer", 
+                supportsMarkdown: q.supportsMarkdown ?? false, 
+                maxLength: q.maxLength ?? undefined
+              };
+            case "true_false":
+            default:
+              return { id, text, type: "true_false" };
+          }
+        });
+        formMethods.setValue("questions", updatedQuestions);
+      }
+    },
+    onError: (error) => toast.error(`Failed to move question down: ${error.message}`),
+  });
+
+  const moveQuestionToTopMutation = api.form.moveQuestionToTop.useMutation({
+    onSuccess: (data) => {
+      toast.success("Question moved to top!");
+      if (editingForm && data.updatedForm) {
+        // Update the local form state with the reordered questions
+        const updatedQuestions = data.updatedForm.questions.map((q): ClientFormQuestion => {
+          const id = q.id.toString();
+          const text = q.text;
+          switch (q.type) {
+            case "multiple_choice":
+              return { 
+                id, text, type: "multiple_choice", 
+                options: q.options ?? [], 
+                allowMultiple: q.allowMultiple ?? false 
+              };
+            case "short_answer":
+              return { 
+                id, text, type: "short_answer", 
+                maxLength: q.maxLength ?? undefined
+              };
+            case "long_answer":
+              return { 
+                id, text, type: "long_answer", 
+                supportsMarkdown: q.supportsMarkdown ?? false, 
+                maxLength: q.maxLength ?? undefined
+              };
+            case "true_false":
+            default:
+              return { id, text, type: "true_false" };
+          }
+        });
+        formMethods.setValue("questions", updatedQuestions);
+        // Move the active question index to 0 since it's now at the top
+        setActiveQuestionIndex(0);
+      }
+    },
+    onError: (error) => toast.error(`Failed to move question to top: ${error.message}`),
+  });
+
+  // Helper function to handle question reordering
+  const handleReorderQuestion = (questionIndex: number, direction: 'up' | 'down' | 'top') => {
+    if (!editingForm) {
+      toast.error("Please save the form first before reordering questions.");
+      return;
+    }
+
+    const formId = editingForm.id;
+    
+    switch (direction) {
+      case 'up':
+        moveQuestionUpMutation.mutate({ formId, questionIndex });
+        break;
+      case 'down':
+        moveQuestionDownMutation.mutate({ formId, questionIndex });
+        break;
+      case 'top':
+        moveQuestionToTopMutation.mutate({ formId, questionIndex });
+        break;
+    }
+  };
 
   const openCreateFormDialog = () => {
     setEditingForm(null);
@@ -524,9 +660,14 @@ export default function FormsAdmin() {
                                             <div className="flex-grow space-y-1">
                                                 {!isEditingThisQuestion ? (
                                                     <div className="flex justify-between items-center cursor-pointer">
-                                                        <p className="font-medium break-all whitespace-pre-line pr-2" style={{ overflowWrap: 'anywhere' }}>
-                                                            {index + 1}. {currentQuestionWatched?.text || <span className="italic text-muted-foreground">Untitled Question</span>}
-                                                        </p>
+                                                        <div className="flex items-center gap-2">
+                                                            {editingForm && (
+                                                                <GripVertical className="h-4 w-4 text-muted-foreground" />
+                                                            )}
+                                                            <p className="font-medium break-all whitespace-pre-line pr-2" style={{ overflowWrap: 'anywhere' }}>
+                                                                {index + 1}. {currentQuestionWatched?.text || <span className="italic text-muted-foreground">Untitled Question</span>}
+                                                            </p>
+                                                        </div>
                                                         <div className="flex items-center gap-2">
                                                             <Badge variant="outline" className="text-xs">{QuestionTypeLabels[currentQuestionWatched?.type ?? 'short_answer']}</Badge>
                                                             <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -617,10 +758,51 @@ export default function FormsAdmin() {
                                                             </div>
                                                         )}
 
-                                                        <div className="flex items-center justify-end gap-2 pt-3 border-t mt-3">
-                                                            <Button type="button" variant="outline" size="sm" onClick={() => duplicateQuestion(index)}>Duplicate</Button>
-                                                            <Button type="button" variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => removeQuestion(index)} disabled={questionFields.length <= 1}>Delete</Button>
-                                                            <Button type="button" variant="default" size="sm" onClick={() => setActiveQuestionIndex(null)}>Done</Button>
+                                                        <div className="flex items-center justify-between gap-2 pt-3 border-t mt-3">
+                                                            {/* Question Reordering Controls - Only show for existing forms */}
+                                                            {editingForm && (
+                                                                <div className="flex items-center gap-1">
+                                                                    <Button 
+                                                                        type="button" 
+                                                                        variant="outline" 
+                                                                        size="sm"
+                                                                        onClick={() => handleReorderQuestion(index, 'top')}
+                                                                        disabled={index === 0 || moveQuestionToTopMutation.isPending}
+                                                                        className="h-8 px-2"
+                                                                        title="Move to top"
+                                                                    >
+                                                                        <MoveUp className="h-3.5 w-3.5" />
+                                                                    </Button>
+                                                                    <Button 
+                                                                        type="button" 
+                                                                        variant="outline" 
+                                                                        size="sm"
+                                                                        onClick={() => handleReorderQuestion(index, 'up')}
+                                                                        disabled={index === 0 || moveQuestionUpMutation.isPending}
+                                                                        className="h-8 px-2"
+                                                                        title="Move up"
+                                                                    >
+                                                                        <ArrowUp className="h-3.5 w-3.5" />
+                                                                    </Button>
+                                                                    <Button 
+                                                                        type="button" 
+                                                                        variant="outline" 
+                                                                        size="sm"
+                                                                        onClick={() => handleReorderQuestion(index, 'down')}
+                                                                        disabled={index >= questionFields.length - 1 || moveQuestionDownMutation.isPending}
+                                                                        className="h-8 px-2"
+                                                                        title="Move down"
+                                                                    >
+                                                                        <ArrowDown className="h-3.5 w-3.5" />
+                                                                    </Button>
+                                                                </div>
+                                                            )}
+                                                            
+                                                            <div className="flex items-center gap-2">
+                                                                <Button type="button" variant="outline" size="sm" onClick={() => duplicateQuestion(index)}>Duplicate</Button>
+                                                                <Button type="button" variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => removeQuestion(index)} disabled={questionFields.length <= 1}>Delete</Button>
+                                                                <Button type="button" variant="default" size="sm" onClick={() => setActiveQuestionIndex(null)}>Done</Button>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 )}

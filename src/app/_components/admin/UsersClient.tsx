@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { api, type RouterOutputs } from "@/trpc/react";
 import {
   Table,
@@ -12,16 +12,35 @@ import {
   TableCaption,
 } from "@/components/ui/table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, Loader2, UserCog, Search } from 'lucide-react';
-import { Badge } from "@/components/ui/badge";
+import { AlertTriangle, Loader2, UserCog, Search, Filter } from 'lucide-react';
 import { Input } from "@/components/ui/input";
 import { useTableControls } from '@/hooks/useTableControls';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual';
 import { Progress } from '@/components/ui/progress';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // Infer element type from procedure output
 type UsersOutput = RouterOutputs["admin"]["users"]["listUsers"];
 type User = UsersOutput extends (infer T)[] | undefined ? T : never;
+
+// Add these types at the top with other types
+type RoleFilter = 'all' | 'admin' | 'moderator' | 'user';
+type HasTsUidFilter = 'all' | 'yes' | 'no';
 
 interface UsersClientProps {
   initialUsers: User[] | null;
@@ -36,9 +55,104 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
   const [isFetchingAll, setIsFetchingAll] = useState(true);
   const [fetchingError, setFetchingError] = useState<string | null>(null);
   const [currentSkipForProgress, setCurrentSkipForProgress] = useState(initialUsers?.length ?? 0);
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
+  const [hasTsUidFilter, setHasTsUidFilter] = useState<HasTsUidFilter>('all');
   
   const trpcUtils = api.useUtils();
   const initialUsersRef = useRef(initialUsers);
+
+  // Update the useTableControls hook usage
+  const {
+    searchTerm,
+    setSearchTerm,
+    totalItems: totalFilteredItems,
+    filteredData: initialFilteredUsers,
+  } = useTableControls<User>({
+    data: allFetchedUsers,
+    searchKeys: ['username', 'discord_id', 'ts_uid'],
+  });
+
+  // Add additional filtering
+  const filteredUsers = useMemo(() => {
+    let filtered = initialFilteredUsers;
+
+    // Apply role filter
+    if (roleFilter !== 'all') {
+      filtered = filtered.filter(user => {
+        switch (roleFilter) {
+          case 'admin':
+            return user.is_admin;
+          case 'moderator':
+            return user.is_moderator;
+          case 'user':
+            return !user.is_admin && !user.is_moderator;
+          default:
+            return true;
+        }
+      });
+    }
+
+    // Apply TeamSpeak UID filter
+    if (hasTsUidFilter !== 'all') {
+      filtered = filtered.filter(user => {
+        if (hasTsUidFilter === 'yes') {
+          return !!user.ts_uid;
+        } else {
+          return !user.ts_uid;
+        }
+      });
+    }
+
+    return filtered;
+  }, [initialFilteredUsers, roleFilter, hasTsUidFilter]);
+
+  // Update the mutation to properly refresh the data
+  const updateUserMutation = api.admin.users.updateUser.useMutation({
+    onMutate: async ({ discord_id, is_admin, is_moderator }) => {
+      await trpcUtils.admin.users.listUsers.cancel();
+      
+      // Update the local state directly
+      setAllFetchedUsers(prev => 
+        prev.map(user => {
+          if (user.discord_id === discord_id) {
+            return {
+              ...user,
+              is_admin: is_admin ?? user.is_admin,
+              is_moderator: is_moderator ?? user.is_moderator
+            };
+          }
+          return user;
+        })
+      );
+
+      return { previousUsers: allFetchedUsers };
+    },
+    onError: (err, newData, context) => {
+      // Revert the changes on error
+      if (context?.previousUsers) {
+        setAllFetchedUsers(context.previousUsers);
+      }
+      toast.error(`Failed to update user role: ${err.message}`);
+    },
+    onSuccess: () => {
+      toast.success("User role updated successfully");
+      // Refetch to ensure we're in sync with the server
+      void trpcUtils.admin.users.listUsers.invalidate();
+    }
+  });
+
+  const handleRoleUpdate = async (user: User, newRole: 'admin' | 'moderator' | 'user') => {
+    try {
+      await updateUserMutation.mutateAsync({
+        discord_id: user.discord_id,
+        is_admin: newRole === 'admin',
+        is_moderator: newRole === 'moderator'
+      });
+    } catch (error) {
+      // Error is now handled in the mutation's onError callback
+      console.error('Error updating user role:', error);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -119,17 +233,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
       active = false;
       console.log("UserClient: Fetch all effect cleanup");
     };
-  }, [trpcUtils, allFetchedUsers.length, isFetchingAll]);
-
-  const {
-    searchTerm,
-    setSearchTerm,
-    totalItems: totalFilteredItems,
-    filteredData: filteredUsers,
-  } = useTableControls<User>({
-    data: allFetchedUsers,
-    searchKeys: ['username', 'discord_id', 'ts_uid'],
-  });
+  }, [trpcUtils, allFetchedUsers.length, isFetchingAll, allFetchedUsers]);
 
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -143,6 +247,81 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   const isLoadingUiForInitialData = isFetchingAll && allFetchedUsers.length < PAGE_SIZE && allFetchedUsers.length < TOTAL_EXPECTED_USERS;
+
+  // Modify the existing table row to add a role management button
+  const renderTableRow = (user: User, virtualItem: VirtualItem) => (
+    <TableRow 
+      key={user.discord_id + "-" + virtualItem.index} 
+      style={{
+        position: 'absolute',
+        top: `${virtualItem.start}px`,
+        left: 0,
+        width: '100%',
+        height: `${virtualItem.size}px`,
+        display: 'flex',
+      }}
+      data-index={virtualItem.index}
+    >
+      <TableCell 
+        style={{ 
+          width: '25%', 
+          position: 'sticky', 
+          left: 0, 
+          zIndex: 11,
+          background: 'hsl(var(--card))'
+        }} 
+        className="font-medium truncate"
+      >
+        {user.username}
+      </TableCell>
+      <TableCell style={{ width: '25%' }} className="truncate">{user.discord_id}</TableCell>
+      <TableCell style={{ width: '20%' }} className="truncate">{user.ts_uid ?? 'N/A'}</TableCell>
+      <TableCell style={{ width: '15%' }}>
+        <div className="flex items-center gap-2">
+          {user.is_admin && <Badge variant="destructive">Admin</Badge>}
+          {user.is_moderator && <Badge variant="secondary">Moderator</Badge>}
+          {!user.is_admin && !user.is_moderator && <Badge variant="outline">User</Badge>}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-2"
+              >
+                <UserCog className="h-4 w-4" />
+                Change
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem
+                onClick={() => handleRoleUpdate(user, 'admin')}
+                className={user.is_admin ? "bg-muted" : ""}
+              >
+                Admin
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => handleRoleUpdate(user, 'moderator')}
+                className={user.is_moderator ? "bg-muted" : ""}
+              >
+                Moderator
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => handleRoleUpdate(user, 'user')}
+                className={!user.is_admin && !user.is_moderator ? "bg-muted" : ""}
+              >
+                User
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </TableCell>
+      <TableCell style={{ width: '15%' }} className="truncate">
+        {user.last_synced && !isNaN(Date.parse(user.last_synced))
+          ? new Date(user.last_synced).toLocaleString()
+          : 'Invalid date'}
+      </TableCell>
+    </TableRow>
+  );
 
   if (isLoadingUiForInitialData && !fetchingError) {
     return (
@@ -207,21 +386,49 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
           {isFetchingAll && allFetchedUsers.length < TOTAL_EXPECTED_USERS && "(Still loading more...)"}
           {fetchingError && !isFetchingAll && <span className="text-destructive">(Load incomplete)</span>}
         </CardDescription>
-        <div className="mt-4 relative flex items-center">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder={`Search ${allFetchedUsers.length.toLocaleString()} loaded users...`}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="max-w-sm pl-10"
-              disabled={isFetchingAll && allFetchedUsers.length < PAGE_SIZE}
-            />
+        <div className="mt-4 flex flex-col gap-4">
+          <div className="flex items-center gap-4">
+            <div className="relative flex items-center flex-1">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder={`Search ${allFetchedUsers.length.toLocaleString()} loaded users...`}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+                disabled={isFetchingAll && allFetchedUsers.length < PAGE_SIZE}
+              />
+            </div>
+            <Select value={roleFilter} onValueChange={(value) => setRoleFilter(value as RoleFilter)}>
+              <SelectTrigger className="w-[180px]">
+                <div className="flex items-center">
+                  <Filter className="mr-2 h-4 w-4" />
+                  <SelectValue placeholder="Filter by role" />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Roles</SelectItem>
+                <SelectItem value="admin">Admins</SelectItem>
+                <SelectItem value="moderator">Moderators</SelectItem>
+                <SelectItem value="user">Users</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={hasTsUidFilter} onValueChange={(value) => setHasTsUidFilter(value as HasTsUidFilter)}>
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Filter by TS UID" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Users</SelectItem>
+                <SelectItem value="yes">Has TS UID</SelectItem>
+                <SelectItem value="no">No TS UID</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {fetchingError && !isFetchingAll && allFetchedUsers.length > 0 && (
+            <p className="text-xs text-destructive">
+              <AlertTriangle className="inline h-3 w-3 mr-1"/> {fetchingError}
+            </p>
+          )}
         </div>
-         {fetchingError && !isFetchingAll && allFetchedUsers.length > 0 && (
-          <p className="text-xs text-destructive mt-2">
-            <AlertTriangle className="inline h-3 w-3 mr-1"/> {fetchingError}
-          </p>
-        )}
       </CardHeader>
       <CardContent>
         {(!filteredUsers || filteredUsers.length === 0) && !isFetchingAll ? (
@@ -244,26 +451,16 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
                 style={{ 
                   position: 'sticky', 
                   top: 0, 
-                  zIndex: 10, // Base z-index for the header row
+                  zIndex: 10,
                   background: 'hsl(var(--card))' 
                 }} 
               >
                 <TableRow>
-                  <TableHead 
-                    style={{ 
-                      width: '20%', 
-                      position: 'sticky', 
-                      left: 0, 
-                      zIndex: 12, // Highest z-index for the top-left sticky cell
-                      background: 'hsl(var(--card))' // Match header background
-                    }}
-                  >
-                    Username
-                  </TableHead>
+                  <TableHead style={{ width: '25%' }}>Username</TableHead>
                   <TableHead style={{ width: '25%' }}>Discord ID</TableHead>
-                  <TableHead style={{ width: '15%' }}>TeamSpeak UID</TableHead>
-                  <TableHead style={{ width: '10%' }}>Status</TableHead>
-                  <TableHead style={{ width: '30%' }}>Last Synced</TableHead>
+                  <TableHead style={{ width: '20%' }}>TeamSpeak UID</TableHead>
+                  <TableHead style={{ width: '15%' }}>Status</TableHead>
+                  <TableHead style={{ width: '15%' }}>Last Synced</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody 
@@ -276,46 +473,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
                 {virtualItems.map((virtualItem) => {
                   const user = filteredUsers?.[virtualItem.index];
                   if (!user) return null;
-
-                  return (
-                    <TableRow 
-                      key={user.discord_id + "-" + virtualItem.index} 
-                      style={{
-                        position: 'absolute',
-                        top: `${virtualItem.start}px`,
-                        left: 0,
-                        width: '100%',
-                        height: `${virtualItem.size}px`,
-                        display: 'flex',
-                      }}
-                      data-index={virtualItem.index}
-                    >
-                      <TableCell 
-                        style={{ 
-                          width: '20%', 
-                          position: 'sticky', 
-                          left: 0, 
-                          zIndex: 11, // z-index for sticky body cells (below header, above other body cells)
-                          background: 'hsl(var(--card))' // Match row/card background
-                        }} 
-                        className="font-medium truncate"
-                      >
-                        {user.username}
-                      </TableCell>
-                      <TableCell style={{ width: '25%' }} className="truncate">{user.discord_id}</TableCell>
-                      <TableCell style={{ width: '15%' }} className="truncate">{user.ts_uid ?? 'N/A'}</TableCell>
-                      <TableCell style={{ width: '10%' }}>
-                        {user.is_admin && <Badge variant="destructive" className="mr-1">Admin</Badge>}
-                        {user.is_moderator && <Badge variant="secondary">Moderator</Badge>}
-                        {!user.is_admin && !user.is_moderator && <Badge variant="outline">User</Badge>}
-                      </TableCell>
-                      <TableCell style={{ width: '30%' }} className="truncate">{
-                        user.last_synced && !isNaN(Date.parse(user.last_synced))
-                          ? new Date(user.last_synced).toLocaleString()
-                          : 'Invalid date'
-                      }</TableCell>
-                    </TableRow>
-                  );
+                  return renderTableRow(user, virtualItem);
                 })}
               </TableBody>
             </Table>

@@ -10,7 +10,7 @@ import { PostHogProvider } from "@/components/provider/posthog-provider";
 export const metadata: Metadata = {
   title: "JGN Panel",
   description: "JGN Panel",
-  icons: [{ rel: "icon", url: "/favicon.ico" }],
+  icons: [{ rel: "icon", url: "https://vgrtqyl5lv.ufs.sh/f/dbe186b0-89bf-4548-8b8b-3bbca8d77c0e-29ew.png" }],
 };
 
 const geist = Geist({

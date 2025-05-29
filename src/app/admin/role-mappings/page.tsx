@@ -8,7 +8,7 @@ import { AlertTriangle } from 'lucide-react';
 async function getInitialData() {
   const [roleMappings, discordRoles, tsGroups] = await Promise.all([
     api.admin.roleMappings.listRoleMappings({ limit: 50 }), // Adjust limit as needed
-    api.admin.roles.listRoles({ limit: 200 }), // Fetch all roles for dropdown
+    api.admin.roles.listRoles({ limit: 1000 }), // Fetch all roles at once
     api.admin.teamSpeakGroups.listTsGroups({ limit: 200 }), // Fetch all TS groups for dropdown
   ]).catch(error => {
     console.error("Failed to fetch initial data for role mappings:", error);

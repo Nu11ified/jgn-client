@@ -77,39 +77,33 @@ export default function RoleMappingsClient({
 
   // --- Discord Role Dropdown Backend Pagination & Search ---
   const [discordRoleSearch, setDiscordRoleSearch] = useState("");
-  const [discordRolePage, setDiscordRolePage] = useState(0);
-  const ROLES_PER_PAGE = 100;
-
-  // Fetch roles from backend with skip/limit
+  
+  // Fetch all roles at once
   const {
     data: discordRolesData,
     isLoading: isLoadingDiscordRoles,
     error: discordRolesError,
   } = api.admin.roles.listRoles.useQuery(
     {
-      skip: discordRolePage * ROLES_PER_PAGE,
-      limit: ROLES_PER_PAGE,
-      // If backend supports search, add: search: discordRoleSearch
+      limit: 1000, // Increased limit to load all roles at once
     },
     {
+      initialData: initialDiscordRoles ?? undefined,
       refetchOnWindowFocus: false,
+      enabled: !!initialDiscordRoles
     }
   );
-  const discordRoles = useMemo(() => discordRolesData ?? [], [discordRolesData]);
+  const discordRoles = discordRolesData ?? initialDiscordRoles;
 
-  // If backend does not support search, filter locally
+  // Filter roles locally based on search
   const filteredDiscordRoles = useMemo(() => {
     const search = discordRoleSearch.trim().toLowerCase();
-    if (!search) return discordRoles;
+    if (!search || !discordRoles) return discordRoles ?? [];
     return discordRoles.filter(role =>
       role.role_name.toLowerCase().includes(search) ||
       role.role_id.toLowerCase().includes(search)
     );
   }, [discordRoles, discordRoleSearch]);
-
-  // Pagination controls (backend)
-  const hasNextPage = discordRoles.length === ROLES_PER_PAGE;
-  const hasPrevPage = discordRolePage > 0;
 
   const { data: tsGroupsData, isLoading: isLoadingTsGroups, error: tsGroupsError } = api.admin.teamSpeakGroups.listTsGroups.useQuery(
     { limit: 1000 }, 
@@ -293,7 +287,6 @@ export default function RoleMappingsClient({
                     value={discordRoleSearch}
                     onChange={e => {
                       setDiscordRoleSearch(e.target.value);
-                      setDiscordRolePage(0); // Reset to first page on search
                     }}
                     className="mb-2"
                   />
@@ -318,30 +311,6 @@ export default function RoleMappingsClient({
                               {role.role_name} (ID: {role.role_id})
                             </SelectItem>
                           ))}
-                          {/* Pagination controls (backend) */}
-                          <div className="flex items-center justify-between px-2 py-1 border-t mt-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              disabled={!hasPrevPage}
-                              onClick={() => setDiscordRolePage(p => Math.max(0, p - 1))}
-                            >
-                              Prev
-                            </Button>
-                            <span className="text-xs text-muted-foreground">
-                              Page {discordRolePage + 1}
-                            </span>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              disabled={!hasNextPage}
-                              onClick={() => setDiscordRolePage(p => p + 1)}
-                            >
-                              Next
-                            </Button>
-                          </div>
                         </SelectContent>
                       </Select>
                     )}

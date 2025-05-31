@@ -77,6 +77,7 @@ const updateTeamSchema = z.object({
 const createMemberSchema = z.object({
   discordId: z.string().min(1, "Discord ID is required"),
   departmentId: z.number().int().positive(),
+  roleplayName: z.string().min(1, "Roleplay name is required").max(100, "Roleplay name must be 100 characters or less").optional(),
   rankId: z.number().int().positive().optional(),
   badgeNumber: z.string().max(20).optional(),
   primaryTeamId: z.number().int().positive().optional(),
@@ -86,6 +87,7 @@ const createMemberSchema = z.object({
 
 const updateMemberSchema = z.object({
   id: z.number().int().positive(),
+  roleplayName: z.string().min(1, "Roleplay name is required").max(100, "Roleplay name must be 100 characters or less").optional().nullable(),
   rankId: z.number().int().positive().optional().nullable(),
   badgeNumber: z.string().max(20).optional().nullable(),
   primaryTeamId: z.number().int().positive().optional().nullable(),
@@ -1810,9 +1812,14 @@ export const deptRouter = createTRPCRouter({
             const result = await postgrestDb
               .insert(deptSchema.departmentMembers)
               .values({
-                ...input,
+                discordId: input.discordId,
+                departmentId: input.departmentId,
+                roleplayName: input.roleplayName,
                 departmentIdNumber,
                 callsign,
+                status: "in_training",
+                rankId: null, // No rank until training is completed
+                notes: input.notes,
               })
               .returning();
 
@@ -1859,6 +1866,7 @@ export const deptRouter = createTRPCRouter({
               .select({
                 id: deptSchema.departmentMembers.id,
                 discordId: deptSchema.departmentMembers.discordId,
+                roleplayName: deptSchema.departmentMembers.roleplayName,
                 callsign: deptSchema.departmentMembers.callsign,
                 badgeNumber: deptSchema.departmentMembers.badgeNumber,
                 status: deptSchema.departmentMembers.status,
@@ -1966,9 +1974,12 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Prepare update data with proper null handling
-            const memberUpdateData: Partial<Pick<typeof deptSchema.departmentMembers.$inferInsert, 'rankId' | 'badgeNumber' | 'primaryTeamId' | 'status' | 'notes' | 'isActive' | 'callsign'>> = {};
+            const memberUpdateData: Partial<Pick<typeof deptSchema.departmentMembers.$inferInsert, 'roleplayName' | 'rankId' | 'badgeNumber' | 'primaryTeamId' | 'status' | 'notes' | 'isActive' | 'callsign'>> = {};
             
             // Handle null values properly for nullable fields
+            if (updateData.roleplayName !== undefined) {
+              memberUpdateData.roleplayName = updateData.roleplayName;
+            }
             if (updateData.rankId !== undefined) {
               memberUpdateData.rankId = updateData.rankId;
             }
@@ -3666,6 +3677,57 @@ export const deptRouter = createTRPCRouter({
 
     // ===== DEPARTMENT INFO AND MEMBERS =====
     info: createTRPCRouter({
+      // Update my roleplay name
+      updateMyRoleplayName: protectedProcedure
+        .input(z.object({
+          departmentId: z.number().int().positive(),
+          roleplayName: z.string().min(1, "Roleplay name is required").max(100, "Roleplay name must be 100 characters or less"),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          try {
+            // Check if user is member of department
+            const member = await postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+              })
+              .from(deptSchema.departmentMembers)
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.discordId, ctx.session.user.id),
+                  eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                  eq(deptSchema.departmentMembers.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (member.length === 0) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You are not a member of this department",
+              });
+            }
+
+            // Update roleplay name
+            const result = await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({ roleplayName: input.roleplayName })
+              .where(eq(deptSchema.departmentMembers.id, member[0]!.id))
+              .returning();
+
+            return {
+              success: true,
+              member: result[0],
+              message: "Roleplay name updated successfully",
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to update roleplay name",
+            });
+          }
+        }),
+
       // Get department info that user has access to
       getDepartment: protectedProcedure
         .input(z.object({ departmentId: z.number().int().positive() }))
@@ -3814,6 +3876,7 @@ export const deptRouter = createTRPCRouter({
               .select({
                 id: deptSchema.departmentMembers.id,
                 discordId: deptSchema.departmentMembers.discordId,
+                roleplayName: deptSchema.departmentMembers.roleplayName,
                 callsign: deptSchema.departmentMembers.callsign,
                 badgeNumber: deptSchema.departmentMembers.badgeNumber,
                 status: deptSchema.departmentMembers.status,
@@ -4660,7 +4723,7 @@ export const deptRouter = createTRPCRouter({
           }
 
           if (!input?.includeAlreadyJoined && memberDepartmentIds.length > 0) {
-            conditions.push(sql`${deptSchema.departments.id} NOT IN (${memberDepartmentIds.join(',')})`);
+            conditions.push(sql`${deptSchema.departments.id} NOT IN (${sql.join(memberDepartmentIds, sql`, `)})`);
           }
 
           // Get available departments with basic stats
@@ -4672,7 +4735,7 @@ export const deptRouter = createTRPCRouter({
               description: deptSchema.departments.description,
               callsignPrefix: deptSchema.departments.callsignPrefix,
               memberCount: sql`COUNT(${deptSchema.departmentMembers.id})`.as('memberCount'),
-              isAlreadyMember: sql`CASE WHEN ${deptSchema.departments.id} IN (${memberDepartmentIds.length > 0 ? memberDepartmentIds.join(',') : 'NULL'}) THEN true ELSE false END`.as('isAlreadyMember'),
+              isAlreadyMember: sql`CASE WHEN ${memberDepartmentIds.length > 0 ? sql`${deptSchema.departments.id} IN (${sql.join(memberDepartmentIds, sql`, `)})` : sql`FALSE`} THEN true ELSE false END`.as('isAlreadyMember'),
             })
             .from(deptSchema.departments)
             .leftJoin(
@@ -4688,6 +4751,7 @@ export const deptRouter = createTRPCRouter({
 
           return departments;
         } catch (error) {
+          console.error('listAvailableDepartments error:', error);
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: "Failed to fetch available departments",
@@ -4807,6 +4871,7 @@ export const deptRouter = createTRPCRouter({
     joinDepartment: protectedProcedure
       .input(z.object({
         departmentId: z.number().int().positive(),
+        roleplayName: z.string().min(1, "Roleplay name is required").max(100, "Roleplay name must be 100 characters or less").optional(),
         notes: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -4856,6 +4921,7 @@ export const deptRouter = createTRPCRouter({
                 .set({
                   isActive: true,
                   status: "in_training",
+                  roleplayName: input.roleplayName,
                   notes: input.notes,
                   hireDate: new Date(),
                 })
@@ -4897,6 +4963,7 @@ export const deptRouter = createTRPCRouter({
             .values({
               discordId: ctx.session.user.id,
               departmentId: input.departmentId,
+              roleplayName: input.roleplayName,
               departmentIdNumber,
               callsign,
               status: "in_training",
@@ -4940,6 +5007,7 @@ export const deptRouter = createTRPCRouter({
               departmentId: deptSchema.departmentMembers.departmentId,
               departmentName: deptSchema.departments.name,
               departmentType: deptSchema.departments.type,
+              roleplayName: deptSchema.departmentMembers.roleplayName,
               callsign: deptSchema.departmentMembers.callsign,
               status: deptSchema.departmentMembers.status,
               hireDate: deptSchema.departmentMembers.hireDate,

@@ -383,6 +383,7 @@ export const departmentMembers = createDepartmentTable(
     id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
     discordId: d.text("discord_id").notNull(), // Discord User ID - primary identifier
     departmentId: d.integer("department_id").references(() => departments.id, { onDelete: "cascade" }).notNull(),
+    roleplayName: d.varchar("roleplay_name", { length: 100 }), // Custom RP character name
     rankId: d.integer("rank_id").references(() => departmentRanks.id, { onDelete: "set null" }),
     badgeNumber: d.varchar("badge_number", { length: 20 }), // Optional badge/unit number
     departmentIdNumber: d.integer("department_id_number").unique(), // Unique 3-digit number (100-999) - recyclable
@@ -408,6 +409,7 @@ export const departmentMembers = createDepartmentTable(
     index("member_badge_idx").on(t.badgeNumber),
     index("member_dept_id_number_idx").on(t.departmentIdNumber),
     index("member_callsign_idx").on(t.callsign),
+    index("member_roleplay_name_idx").on(t.roleplayName), // Index for searching by RP name
     unique("unique_member_per_dept").on(t.discordId, t.departmentId),
     unique("unique_dept_id_per_dept").on(t.departmentId, t.departmentIdNumber),
   ]

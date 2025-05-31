@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { index, pgTableCreator, unique } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
+import { type SelectType, type InsertType } from "./drizzle-types";
 
 /**
  * Department Management System Schema
@@ -226,8 +227,56 @@ export const departments = createDepartmentTable(
   ]
 );
 
-export type Department = typeof departments.$inferSelect;
-export type NewDepartment = typeof departments.$inferInsert;
+// --- SIMPLIFIED TYPE EXPORTS ---
+// Using utilities to reduce redundancy instead of individual exports for each table
+
+// Department types
+export type Department = SelectType<typeof departments>;
+export type NewDepartment = InsertType<typeof departments>;
+
+// Department Rank types
+export type DepartmentRank = SelectType<typeof departmentRanks>;
+export type NewDepartmentRank = InsertType<typeof departmentRanks>;
+
+// Department Team types
+export type DepartmentTeam = SelectType<typeof departmentTeams>;
+export type NewDepartmentTeam = InsertType<typeof departmentTeams>;
+
+// Department Team Rank Limit types
+export type DepartmentTeamRankLimit = SelectType<typeof departmentTeamRankLimits>;
+export type NewDepartmentTeamRankLimit = InsertType<typeof departmentTeamRankLimits>;
+
+// Department Member types
+export type DepartmentMember = SelectType<typeof departmentMembers>;
+export type NewDepartmentMember = InsertType<typeof departmentMembers>;
+
+// Department ID Number types
+export type DepartmentIdNumber = SelectType<typeof departmentIdNumbers>;
+export type NewDepartmentIdNumber = InsertType<typeof departmentIdNumbers>;
+
+// Department Team Membership types
+export type DepartmentTeamMembership = SelectType<typeof departmentTeamMemberships>;
+export type NewDepartmentTeamMembership = InsertType<typeof departmentTeamMemberships>;
+
+// Department Time Clock Entry types
+export type DepartmentTimeClockEntry = SelectType<typeof departmentTimeClockEntries>;
+export type NewDepartmentTimeClockEntry = InsertType<typeof departmentTimeClockEntries>;
+
+// Department Meeting types
+export type DepartmentMeeting = SelectType<typeof departmentMeetings>;
+export type NewDepartmentMeeting = InsertType<typeof departmentMeetings>;
+
+// Department Meeting Attendance types
+export type DepartmentMeetingAttendance = SelectType<typeof departmentMeetingAttendance>;
+export type NewDepartmentMeetingAttendance = InsertType<typeof departmentMeetingAttendance>;
+
+// Department Promotion History types
+export type DepartmentPromotionHistory = SelectType<typeof departmentPromotionHistory>;
+export type NewDepartmentPromotionHistory = InsertType<typeof departmentPromotionHistory>;
+
+// Department Disciplinary Action types
+export type DepartmentDisciplinaryAction = SelectType<typeof departmentDisciplinaryActions>;
+export type NewDepartmentDisciplinaryAction = InsertType<typeof departmentDisciplinaryActions>;
 
 // Table for Ranks within Departments
 export const departmentRanks = createDepartmentTable(
@@ -280,9 +329,6 @@ export const departmentRanks = createDepartmentTable(
   ]
 );
 
-export type DepartmentRank = typeof departmentRanks.$inferSelect;
-export type NewDepartmentRank = typeof departmentRanks.$inferInsert;
-
 // Table for Teams within Departments (e.g., SWAT, Detective Division, etc.)
 export const departmentTeams = createDepartmentTable(
   "teams",
@@ -309,9 +355,6 @@ export const departmentTeams = createDepartmentTable(
   ]
 );
 
-export type DepartmentTeam = typeof departmentTeams.$inferSelect;
-export type NewDepartmentTeam = typeof departmentTeams.$inferInsert;
-
 // Table for Team-Specific Rank Limits (overrides department-wide limits)
 export const departmentTeamRankLimits = createDepartmentTable(
   "team_rank_limits",
@@ -332,9 +375,6 @@ export const departmentTeamRankLimits = createDepartmentTable(
     unique("unique_team_rank_limit").on(t.teamId, t.rankId),
   ]
 );
-
-export type DepartmentTeamRankLimit = typeof departmentTeamRankLimits.$inferSelect;
-export type NewDepartmentTeamRankLimit = typeof departmentTeamRankLimits.$inferInsert;
 
 // Table for Department Members
 export const departmentMembers = createDepartmentTable(
@@ -373,9 +413,6 @@ export const departmentMembers = createDepartmentTable(
   ]
 );
 
-export type DepartmentMember = typeof departmentMembers.$inferSelect;
-export type NewDepartmentMember = typeof departmentMembers.$inferInsert;
-
 // Table for tracking Department ID Numbers (100-999) - for recycling system
 export const departmentIdNumbers = createDepartmentTable(
   "id_numbers",
@@ -401,9 +438,6 @@ export const departmentIdNumbers = createDepartmentTable(
   ]
 );
 
-export type DepartmentIdNumber = typeof departmentIdNumbers.$inferSelect;
-export type NewDepartmentIdNumber = typeof departmentIdNumbers.$inferInsert;
-
 // Junction table for Team Memberships (many-to-many: members can be in multiple teams)
 export const departmentTeamMemberships = createDepartmentTable(
   "team_memberships",
@@ -424,9 +458,6 @@ export const departmentTeamMemberships = createDepartmentTable(
     unique("unique_member_team").on(t.memberId, t.teamId),
   ]
 );
-
-export type DepartmentTeamMembership = typeof departmentTeamMemberships.$inferSelect;
-export type NewDepartmentTeamMembership = typeof departmentTeamMemberships.$inferInsert;
 
 // Table for Time Clock Entries
 export const departmentTimeClockEntries = createDepartmentTable(
@@ -454,9 +485,6 @@ export const departmentTimeClockEntries = createDepartmentTable(
     index("timeclock_status_idx").on(t.status),
   ]
 );
-
-export type DepartmentTimeClockEntry = typeof departmentTimeClockEntries.$inferSelect;
-export type NewDepartmentTimeClockEntry = typeof departmentTimeClockEntries.$inferInsert;
 
 // Table for Meetings
 export const departmentMeetings = createDepartmentTable(
@@ -491,9 +519,6 @@ export const departmentMeetings = createDepartmentTable(
   ]
 );
 
-export type DepartmentMeeting = typeof departmentMeetings.$inferSelect;
-export type NewDepartmentMeeting = typeof departmentMeetings.$inferInsert;
-
 // Table for Meeting Attendance
 export const departmentMeetingAttendance = createDepartmentTable(
   "meeting_attendance",
@@ -520,9 +545,6 @@ export const departmentMeetingAttendance = createDepartmentTable(
   ]
 );
 
-export type DepartmentMeetingAttendance = typeof departmentMeetingAttendance.$inferSelect;
-export type NewDepartmentMeetingAttendance = typeof departmentMeetingAttendance.$inferInsert;
-
 // Table for Promotion History
 export const departmentPromotionHistory = createDepartmentTable(
   "promotion_history",
@@ -548,9 +570,6 @@ export const departmentPromotionHistory = createDepartmentTable(
     index("promotion_promoter_idx").on(t.promotedBy),
   ]
 );
-
-export type DepartmentPromotionHistory = typeof departmentPromotionHistory.$inferSelect;
-export type NewDepartmentPromotionHistory = typeof departmentPromotionHistory.$inferInsert;
 
 // Table for Disciplinary Actions
 export const departmentDisciplinaryActions = createDepartmentTable(
@@ -580,9 +599,6 @@ export const departmentDisciplinaryActions = createDepartmentTable(
     index("disciplinary_active_idx").on(t.isActive),
   ]
 );
-
-export type DepartmentDisciplinaryAction = typeof departmentDisciplinaryActions.$inferSelect;
-export type NewDepartmentDisciplinaryAction = typeof departmentDisciplinaryActions.$inferInsert;
 
 // --- RELATIONS ---
 export const departmentsRelations = relations(departments, ({ many }) => ({

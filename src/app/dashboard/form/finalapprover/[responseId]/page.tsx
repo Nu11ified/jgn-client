@@ -132,7 +132,7 @@ const FinalApprovalSubmissionPage = () => {
     );
   }
 
-  if (!responseData || !responseData.form) {
+  if (!responseData?.form) {
     return (
       <div className="container mx-auto py-10 px-4 text-center">
         <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-amber-500" />
@@ -147,6 +147,7 @@ const FinalApprovalSubmissionPage = () => {
   const { form, answers: submittedAnswers, status, submittedAt, reviewerDecisions } = responseData;
   const questions = form.questions as FormQuestionDefinition[] | undefined ?? [];
   const isPendingFinalApproval = status === 'pending_approval';
+  const hasReviewerApproval = responseData.reviewerDecisions?.some((decision) => decision.decision === "yes");
 
   return (
     <div className="container mx-auto py-10 px-4 max-w-3xl">

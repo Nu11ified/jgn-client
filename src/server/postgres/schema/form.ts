@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { index, pgTableCreator } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
+import { type SelectType, type InsertType } from "./drizzle-types";
 
 /**
  * This is an example of how to use the multi-project schema feature of Drizzle ORM. Use the same
@@ -100,8 +101,9 @@ export const formCategories = createTable(
   })
 );
 
-export type FormCategory = typeof formCategories.$inferSelect;
-export type NewFormCategory = typeof formCategories.$inferInsert;
+// Using simplified utilities instead of verbose type exports
+export type FormCategory = SelectType<typeof formCategories>;
+export type NewFormCategory = InsertType<typeof formCategories>;
 
 // Table for Forms
 export const forms = createTable(
@@ -132,8 +134,8 @@ export const forms = createTable(
   ]
 );
 
-export type Form = typeof forms.$inferSelect;
-export type NewForm = typeof forms.$inferInsert;
+export type Form = SelectType<typeof forms>;
+export type NewForm = InsertType<typeof forms>;
 
 // Enum for Form Response Status/Stages
 export const formResponseStatusEnum = z.enum([
@@ -190,8 +192,8 @@ export const formResponses = createTable(
   ]
 );
 
-export type FormResponse = typeof formResponses.$inferSelect;
-export type NewFormResponse = typeof formResponses.$inferInsert;
+export type FormResponse = SelectType<typeof formResponses>;
+export type NewFormResponse = InsertType<typeof formResponses>;
 
 // Junction table for many-to-many relationship between forms and access roles (if needed for more complex queries, otherwise array is fine)
 // For now, sticking with array types in the forms table for simplicity.

@@ -3,6 +3,26 @@ import axios from "axios";
 import { adminProcedure, createTRPCRouter } from "@/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { env } from "@/env";
+import {
+  ZodUserInDB,
+  ZodServerInDB,
+  ZodUserServerMembershipInDB,
+  ZodRoleInDB,
+  ZodUserServerRoleInDB,
+  ZodBanHistoryInDB,
+  ZodTeamSpeakServerGroupInDB,
+  ZodUserTeamSpeakServerGroupInDB,
+  ZodDiscordRoleToTeamSpeakGroupMappingInDB,
+  type UserInDB,
+  type ServerInDB,
+  type UserServerMembershipInDB,
+  type RoleInDB,
+  type UserServerRoleInDB,
+  type BanHistoryInDB,
+  type TeamSpeakServerGroupInDB,
+  type UserTeamSpeakServerGroupInDB,
+  type DiscordRoleToTeamSpeakGroupMappingInDB,
+} from "@/server/api/shared-types";
 
 // Define the base URL for your FastAPI backend
 const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
@@ -16,27 +36,13 @@ const ZodValidationError = z.object({
   type: z.string(),
 });
 
-const ZodHTTPValidationError = z.object({
-  detail: z.array(ZodValidationError).optional(),
-});
-
-// User Schemas
+// Create/Update schemas (these remain local as they differ from the main schemas)
 const ZodUserCreate = z.object({
   username: z.string(),
   ts_uid: z.string().nullable().optional(),
   is_moderator: z.boolean().default(false).optional(),
   is_admin: z.boolean().default(false).optional(),
-  discord_id: z.string(), // Changed from number
-});
-
-const ZodUserInDB = z.object({
-  username: z.string(),
-  ts_uid: z.string().nullable().optional(),
-  is_moderator: z.boolean().default(false),
-  is_admin: z.boolean().default(false),
-  discord_id: z.string(), // Changed from number
-  api_key: z.string(),
-  last_synced: z.string().optional().nullable(),
+  discord_id: z.string(),
 });
 
 const ZodUserUpdate = z.object({
@@ -47,37 +53,21 @@ const ZodUserUpdate = z.object({
   api_key: z.string().nullable().optional(),
 });
 
-// Server Schemas
 const ZodServerCreate = z.object({
   server_name: z.string(),
-  server_id: z.string(), // Changed from number
-});
-
-const ZodServerInDB = z.object({
-  server_name: z.string(),
-  server_id: z.string(), // Changed from number
+  server_id: z.string(),
 });
 
 const ZodServerUpdate = z.object({
   server_name: z.string().nullable().optional(),
 });
 
-// UserServerMembership Schemas
 const ZodUserServerMembershipCreate = z.object({
   is_banned: z.boolean().default(false).optional(),
   joined_at: z.string().datetime().nullable().optional(),
   left_at: z.string().datetime().nullable().optional(),
-  user_discord_id: z.string(), // Changed from number
-  server_id: z.string(), // Changed from number
-});
-
-const ZodUserServerMembershipInDB = z.object({
-  is_banned: z.boolean().default(false),
-  joined_at: z.string().datetime().nullable().optional(),
-  left_at: z.string().datetime().nullable().optional(),
-  id: z.number().int(),
-  user_discord_id: z.string(), // Changed from number
-  server_id: z.string(), // Changed from number
+  user_discord_id: z.string(),
+  server_id: z.string(),
 });
 
 const ZodUserServerMembershipUpdate = z.object({
@@ -86,65 +76,34 @@ const ZodUserServerMembershipUpdate = z.object({
   left_at: z.string().datetime().nullable().optional(),
 });
 
-// Role Schemas
 const ZodRoleCreate = z.object({
   role_name: z.string(),
-  server_id: z.string(), // Changed from number
-  role_id: z.string(),   // Changed from number
-});
-
-const ZodRoleInDB = z.object({
-  role_name: z.string(),
-  server_id: z.string(), // Changed from number
-  role_id: z.string(),   // Changed from number
+  server_id: z.string(),
+  role_id: z.string(),
 });
 
 const ZodRoleUpdate = z.object({
   role_name: z.string().nullable().optional(),
 });
 
-// UserServerRole Schemas
 const ZodUserServerRoleCreate = z.object({
-  user_discord_id: z.string(), // Changed from number
-  server_id: z.string(),       // Changed from number
-  role_id: z.string(),         // Changed from number
+  user_discord_id: z.string(),
+  server_id: z.string(),
+  role_id: z.string(),
 });
 
-const ZodUserServerRoleInDB = z.object({
-  user_discord_id: z.string(), // Changed from number
-  server_id: z.string(),       // Changed from number
-  role_id: z.string(),         // Changed from number
-  id: z.number().int(),
-});
-
-// BanHistory Schemas
 const ZodBanHistoryCreate = z.object({
-  server_id: z.string(), // Changed from number
-  banned_by_user_id: z.string().nullable().optional(), // Changed from number
+  server_id: z.string(),
+  banned_by_user_id: z.string().nullable().optional(),
   reason: z.string().nullable().optional(),
-  user_discord_id: z.string(), // Changed from number
-});
-
-const ZodBanHistoryInDB = z.object({
-  server_id: z.string(), // Changed from number
-  banned_by_user_id: z.string().nullable().optional(), // Changed from number
-  reason: z.string().nullable().optional(),
-  id: z.number().int(),
-  user_discord_id: z.string(), // Changed from number
-  banned_at: z.string().optional().nullable(),
+  user_discord_id: z.string(),
 });
 
 const ZodBanHistoryUpdate = z.object({
   reason: z.string().nullable().optional(),
 });
 
-// TeamSpeakServerGroup Schemas
 const ZodTeamSpeakServerGroupCreate = z.object({
-  name: z.string(),
-  sgid: z.number().int(),
-});
-
-const ZodTeamSpeakServerGroupInDB = z.object({
   name: z.string(),
   sgid: z.number().int(),
 });
@@ -153,42 +112,19 @@ const ZodTeamSpeakServerGroupUpdate = z.object({
   name: z.string().nullable().optional(),
 });
 
-// UserTeamSpeakServerGroup Schemas
 const ZodUserTeamSpeakServerGroupCreate = z.object({
-  user_discord_id: z.string(), // Changed from number
+  user_discord_id: z.string(),
   sgid: z.number().int(),
 });
 
-const ZodUserTeamSpeakServerGroupInDB = z.object({
-  user_discord_id: z.string(), // Changed from number
-  sgid: z.number().int(),
-  id: z.number().int(),
-});
-
-// DiscordRoleToTeamSpeakGroupMapping Schemas
 const ZodDiscordRoleToTeamSpeakGroupMappingCreate = z.object({
   teamspeak_sgid: z.number().int(),
-  discord_role_id: z.string(), // Changed from number
-});
-
-const ZodDiscordRoleToTeamSpeakGroupMappingInDB = z.object({
-  teamspeak_sgid: z.number().int(),
-  discord_role_id: z.string(), // Changed from number
+  discord_role_id: z.string(),
 });
 
 const ZodDiscordRoleToTeamSpeakGroupMappingUpdate = z.object({
   teamspeak_sgid: z.number().int().nullable().optional(),
 });
-
-// UserUpdateTsUid Schema (for /profile/me/ts_uid endpoint, though not admin, useful for consistency)
-const ZodUserUpdateTsUid = z.object({
-  ts_uid: z.string().max(28).nullable().optional(),
-});
-
-// Success response for DELETE operations that return 204
-// For 204 responses, tRPC procedures can return void or undefined.
-// If a success message is desired for other successful non-data returning operations:
-const ZodSuccessResponse = z.object({ success: z.literal(true) });
 
 // --- End of Zod Schemas ---
 
@@ -216,9 +152,9 @@ export const adminRouter = createTRPCRouter({
     createUser: adminProcedure
       .input(ZodUserCreate)
       .output(ZodUserInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodUserInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<UserInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodUserInDB>>(
+          const response = await axios.post<UserInDB>(
             `${API_BASE_URL}/admin/users/`,
             input,
             {
@@ -240,9 +176,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodUserInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<UserInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserInDB>[]>(
+          const response = await axios.get<UserInDB[]>(
             `${API_BASE_URL}/admin/users/`,
             {
               params: input,
@@ -259,9 +195,9 @@ export const adminRouter = createTRPCRouter({
     getUser: adminProcedure
       .input(z.object({ discord_id: z.string() }))
       .output(ZodUserInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserInDB>> => {
+      .query(async ({ ctx, input }): Promise<UserInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserInDB>>(
+          const response = await axios.get<UserInDB>(
             `${API_BASE_URL}/admin/users/${input.discord_id}`,
             {
               headers: { "X-API-Key": ctx.dbUser.apiKey },
@@ -281,10 +217,10 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(ZodUserInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodUserInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<UserInDB> => {
         const { discord_id, ...updateData } = input;
         try {
-          const response = await axios.put<z.infer<typeof ZodUserInDB>>(
+          const response = await axios.put<UserInDB>(
             `${API_BASE_URL}/admin/users/${discord_id}`,
             updateData,
             {
@@ -321,9 +257,9 @@ export const adminRouter = createTRPCRouter({
     createServer: adminProcedure
       .input(ZodServerCreate)
       .output(ZodServerInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodServerInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<ServerInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodServerInDB>>(
+          const response = await axios.post<ServerInDB>(
             `${API_BASE_URL}/admin/servers/`,
             input,
             {
@@ -345,9 +281,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodServerInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodServerInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<ServerInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodServerInDB>[]>(
+          const response = await axios.get<ServerInDB[]>(
             `${API_BASE_URL}/admin/servers/`,
             {
               params: input,
@@ -364,9 +300,9 @@ export const adminRouter = createTRPCRouter({
     getServer: adminProcedure
       .input(z.object({ server_id: z.string() }))
       .output(ZodServerInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodServerInDB>> => {
+      .query(async ({ ctx, input }): Promise<ServerInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodServerInDB>>(
+          const response = await axios.get<ServerInDB>(
             `${API_BASE_URL}/admin/servers/${input.server_id}`,
             {
               headers: { "X-API-Key": ctx.dbUser.apiKey },
@@ -386,10 +322,10 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(ZodServerInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodServerInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<ServerInDB> => {
         const { server_id, ...updateData } = input;
         try {
-          const response = await axios.put<z.infer<typeof ZodServerInDB>>(
+          const response = await axios.put<ServerInDB>(
             `${API_BASE_URL}/admin/servers/${server_id}`,
             updateData,
             {
@@ -426,9 +362,9 @@ export const adminRouter = createTRPCRouter({
     createUserServerMembership: adminProcedure
       .input(ZodUserServerMembershipCreate)
       .output(ZodUserServerMembershipInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodUserServerMembershipInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<UserServerMembershipInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodUserServerMembershipInDB>>(
+          const response = await axios.post<UserServerMembershipInDB>(
             `${API_BASE_URL}/admin/user_server_memberships/`,
             input,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -448,9 +384,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodUserServerMembershipInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserServerMembershipInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<UserServerMembershipInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserServerMembershipInDB>[]>(
+          const response = await axios.get<UserServerMembershipInDB[]>(
             `${API_BASE_URL}/admin/user_server_memberships/`,
             {
               params: input,
@@ -467,9 +403,9 @@ export const adminRouter = createTRPCRouter({
     getUserServerMembership: adminProcedure
       .input(z.object({ user_discord_id: z.string(), server_id: z.string() }))
       .output(ZodUserServerMembershipInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserServerMembershipInDB>> => {
+      .query(async ({ ctx, input }): Promise<UserServerMembershipInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserServerMembershipInDB>>(
+          const response = await axios.get<UserServerMembershipInDB>(
             `${API_BASE_URL}/admin/user_server_memberships/users/${input.user_discord_id}/servers/${input.server_id}`,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
           );
@@ -488,10 +424,10 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(ZodUserServerMembershipInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodUserServerMembershipInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<UserServerMembershipInDB> => {
         const { user_discord_id, server_id, ...updateData } = input;
         try {
-          const response = await axios.put<z.infer<typeof ZodUserServerMembershipInDB>>(
+          const response = await axios.put<UserServerMembershipInDB>(
             `${API_BASE_URL}/admin/user_server_memberships/users/${user_discord_id}/servers/${server_id}`,
             updateData,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -524,9 +460,9 @@ export const adminRouter = createTRPCRouter({
     createRole: adminProcedure
       .input(ZodRoleCreate)
       .output(ZodRoleInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodRoleInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<RoleInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodRoleInDB>>(
+          const response = await axios.post<RoleInDB>(
             `${API_BASE_URL}/admin/roles/`,
             input,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -546,9 +482,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodRoleInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodRoleInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<RoleInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodRoleInDB>[]>(
+          const response = await axios.get<RoleInDB[]>(
             `${API_BASE_URL}/admin/roles/`,
             {
               params: input,
@@ -565,9 +501,9 @@ export const adminRouter = createTRPCRouter({
     getRole: adminProcedure
       .input(z.object({ role_id: z.string() }))
       .output(ZodRoleInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodRoleInDB>> => {
+      .query(async ({ ctx, input }): Promise<RoleInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodRoleInDB>>(
+          const response = await axios.get<RoleInDB>(
             `${API_BASE_URL}/admin/roles/${input.role_id}`,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
           );
@@ -585,10 +521,10 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(ZodRoleInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodRoleInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<RoleInDB> => {
         const { role_id, ...updateData } = input;
         try {
-          const response = await axios.put<z.infer<typeof ZodRoleInDB>>(
+          const response = await axios.put<RoleInDB>(
             `${API_BASE_URL}/admin/roles/${role_id}`,
             updateData,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -621,9 +557,9 @@ export const adminRouter = createTRPCRouter({
     createUserServerRole: adminProcedure
       .input(ZodUserServerRoleCreate)
       .output(ZodUserServerRoleInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodUserServerRoleInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<UserServerRoleInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodUserServerRoleInDB>>(
+          const response = await axios.post<UserServerRoleInDB>(
             `${API_BASE_URL}/admin/user_server_roles/`,
             input,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -643,9 +579,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodUserServerRoleInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserServerRoleInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<UserServerRoleInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserServerRoleInDB>[]>(
+          const response = await axios.get<UserServerRoleInDB[]>(
             `${API_BASE_URL}/admin/user_server_roles/`,
             {
               params: input,
@@ -662,9 +598,9 @@ export const adminRouter = createTRPCRouter({
     getUserServerRole: adminProcedure
       .input(z.object({ user_discord_id: z.string(), server_id: z.string(), role_id: z.string() }))
       .output(ZodUserServerRoleInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserServerRoleInDB>> => {
+      .query(async ({ ctx, input }): Promise<UserServerRoleInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserServerRoleInDB>>(
+          const response = await axios.get<UserServerRoleInDB>(
             `${API_BASE_URL}/admin/user_server_roles/users/${input.user_discord_id}/servers/${input.server_id}/roles/${input.role_id}`,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
           );
@@ -696,9 +632,9 @@ export const adminRouter = createTRPCRouter({
     createBanHistory: adminProcedure
       .input(ZodBanHistoryCreate)
       .output(ZodBanHistoryInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodBanHistoryInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<BanHistoryInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodBanHistoryInDB>>(
+          const response = await axios.post<BanHistoryInDB>(
             `${API_BASE_URL}/admin/ban_history/`,
             input,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -718,9 +654,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodBanHistoryInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodBanHistoryInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<BanHistoryInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodBanHistoryInDB>[]>(
+          const response = await axios.get<BanHistoryInDB[]>(
             `${API_BASE_URL}/admin/ban_history/`,
             {
               params: input,
@@ -737,9 +673,9 @@ export const adminRouter = createTRPCRouter({
     getBanHistoryEntry: adminProcedure
       .input(z.object({ bh_id: z.number().int() }))
       .output(ZodBanHistoryInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodBanHistoryInDB>> => {
+      .query(async ({ ctx, input }): Promise<BanHistoryInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodBanHistoryInDB>>(
+          const response = await axios.get<BanHistoryInDB>(
             `${API_BASE_URL}/admin/ban_history/${input.bh_id}`,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
           );
@@ -757,10 +693,10 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(ZodBanHistoryInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodBanHistoryInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<BanHistoryInDB> => {
         const { bh_id, ...updateData } = input;
         try {
-          const response = await axios.put<z.infer<typeof ZodBanHistoryInDB>>(
+          const response = await axios.put<BanHistoryInDB>(
             `${API_BASE_URL}/admin/ban_history/${bh_id}`,
             updateData,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -793,9 +729,9 @@ export const adminRouter = createTRPCRouter({
     createTsGroup: adminProcedure
       .input(ZodTeamSpeakServerGroupCreate)
       .output(ZodTeamSpeakServerGroupInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodTeamSpeakServerGroupInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<TeamSpeakServerGroupInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodTeamSpeakServerGroupInDB>>(
+          const response = await axios.post<TeamSpeakServerGroupInDB>(
             `${API_BASE_URL}/admin/teamspeak_groups/`,
             input,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -815,9 +751,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodTeamSpeakServerGroupInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodTeamSpeakServerGroupInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<TeamSpeakServerGroupInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodTeamSpeakServerGroupInDB>[]>(
+          const response = await axios.get<TeamSpeakServerGroupInDB[]>(
             `${API_BASE_URL}/admin/teamspeak_groups/`,
             {
               params: input,
@@ -834,9 +770,9 @@ export const adminRouter = createTRPCRouter({
     getTsGroup: adminProcedure
       .input(z.object({ sgid: z.number().int() }))
       .output(ZodTeamSpeakServerGroupInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodTeamSpeakServerGroupInDB>> => {
+      .query(async ({ ctx, input }): Promise<TeamSpeakServerGroupInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodTeamSpeakServerGroupInDB>>(
+          const response = await axios.get<TeamSpeakServerGroupInDB>(
             `${API_BASE_URL}/admin/teamspeak_groups/${input.sgid}`,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
           );
@@ -854,10 +790,10 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(ZodTeamSpeakServerGroupInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodTeamSpeakServerGroupInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<TeamSpeakServerGroupInDB> => {
         const { sgid, ...updateData } = input;
         try {
-          const response = await axios.put<z.infer<typeof ZodTeamSpeakServerGroupInDB>>(
+          const response = await axios.put<TeamSpeakServerGroupInDB>(
             `${API_BASE_URL}/admin/teamspeak_groups/${sgid}`,
             updateData,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -906,9 +842,9 @@ export const adminRouter = createTRPCRouter({
     createUserTsGroup: adminProcedure
       .input(ZodUserTeamSpeakServerGroupCreate)
       .output(ZodUserTeamSpeakServerGroupInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodUserTeamSpeakServerGroupInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<UserTeamSpeakServerGroupInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodUserTeamSpeakServerGroupInDB>>(
+          const response = await axios.post<UserTeamSpeakServerGroupInDB>(
             `${API_BASE_URL}/admin/user_teamspeak_groups/`,
             input,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -928,9 +864,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodUserTeamSpeakServerGroupInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserTeamSpeakServerGroupInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<UserTeamSpeakServerGroupInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserTeamSpeakServerGroupInDB>[]>(
+          const response = await axios.get<UserTeamSpeakServerGroupInDB[]>(
             `${API_BASE_URL}/admin/user_teamspeak_groups/`,
             {
               params: input,
@@ -947,9 +883,9 @@ export const adminRouter = createTRPCRouter({
     getUserTsGroup: adminProcedure
       .input(z.object({ user_discord_id: z.string(), sgid: z.number().int() }))
       .output(ZodUserTeamSpeakServerGroupInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodUserTeamSpeakServerGroupInDB>> => {
+      .query(async ({ ctx, input }): Promise<UserTeamSpeakServerGroupInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodUserTeamSpeakServerGroupInDB>>(
+          const response = await axios.get<UserTeamSpeakServerGroupInDB>(
             `${API_BASE_URL}/admin/user_teamspeak_groups/users/${input.user_discord_id}/sgids/${input.sgid}`,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
           );
@@ -981,9 +917,9 @@ export const adminRouter = createTRPCRouter({
     createRoleMapping: adminProcedure
       .input(ZodDiscordRoleToTeamSpeakGroupMappingCreate)
       .output(ZodDiscordRoleToTeamSpeakGroupMappingInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<DiscordRoleToTeamSpeakGroupMappingInDB> => {
         try {
-          const response = await axios.post<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>>(
+          const response = await axios.post<DiscordRoleToTeamSpeakGroupMappingInDB>(
             `${API_BASE_URL}/admin/role_mappings/`,
             input,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -1003,9 +939,9 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(z.array(ZodDiscordRoleToTeamSpeakGroupMappingInDB))
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>[]> => {
+      .query(async ({ ctx, input }): Promise<DiscordRoleToTeamSpeakGroupMappingInDB[]> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>[]>(
+          const response = await axios.get<DiscordRoleToTeamSpeakGroupMappingInDB[]>(
             `${API_BASE_URL}/admin/role_mappings/`,
             {
               params: input,
@@ -1022,9 +958,9 @@ export const adminRouter = createTRPCRouter({
     getRoleMapping: adminProcedure
       .input(z.object({ discord_role_id: z.string() }))
       .output(ZodDiscordRoleToTeamSpeakGroupMappingInDB)
-      .query(async ({ ctx, input }): Promise<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>> => {
+      .query(async ({ ctx, input }): Promise<DiscordRoleToTeamSpeakGroupMappingInDB> => {
         try {
-          const response = await axios.get<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>>(
+          const response = await axios.get<DiscordRoleToTeamSpeakGroupMappingInDB>(
             `${API_BASE_URL}/admin/role_mappings/${input.discord_role_id}`,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
           );
@@ -1042,10 +978,10 @@ export const adminRouter = createTRPCRouter({
         })
       )
       .output(ZodDiscordRoleToTeamSpeakGroupMappingInDB)
-      .mutation(async ({ ctx, input }): Promise<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>> => {
+      .mutation(async ({ ctx, input }): Promise<DiscordRoleToTeamSpeakGroupMappingInDB> => {
         const { discord_role_id, ...updateData } = input;
         try {
-          const response = await axios.put<z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>>(
+          const response = await axios.put<DiscordRoleToTeamSpeakGroupMappingInDB>(
             `${API_BASE_URL}/admin/role_mappings/${discord_role_id}`,
             updateData,
             { headers: { "X-API-Key": ctx.dbUser.apiKey } }
@@ -1075,3 +1011,4 @@ export const adminRouter = createTRPCRouter({
 
 // Export type router type signature, NOT the router itself.
 // export type AdminRouter = typeof adminRouter; // This is usually done in the root router file
+

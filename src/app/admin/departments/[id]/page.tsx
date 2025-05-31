@@ -19,6 +19,7 @@ export default async function DepartmentDetailPage({ params }: DepartmentDetailP
     const department = await api.dept.admin.departments.getById({ id: departmentId });
     return <DepartmentDetailClient department={department} />;
   } catch (error) {
+    console.error("Error fetching department details:", error);
     notFound();
   }
 } 

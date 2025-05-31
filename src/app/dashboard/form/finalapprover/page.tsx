@@ -13,7 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ArrowRight, Loader2, Info, CheckCircle, XCircle, ArrowLeft } from 'lucide-react';
+import { ArrowRight, Loader2, Info, ArrowLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 type FormResponseForFinalApprover = RouterOutputs["form"]["listFormResponsesForFinalApprover"]["items"][number];

@@ -8,7 +8,6 @@ import { Loader2, AlertTriangle, Inbox, ChevronDown, ChevronUp } from 'lucide-re
 import { Badge } from "@/components/ui/badge";
 import Link from 'next/link';
 import FormStatusTracker from './FormStatusTracker'; // Will create this next
-import { cn } from '@/lib/utils';
 
 type UserSubmission = RouterOutputs["form"]["listUserSubmissions"]["items"][number];
 // We need more detailed form info for the status tracker than listUserSubmissions provides.

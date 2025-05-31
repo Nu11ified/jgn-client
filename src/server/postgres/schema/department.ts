@@ -19,6 +19,8 @@ export type DepartmentType = z.infer<typeof departmentTypeEnum>;
 
 // Enums for Member Status
 export const departmentMemberStatusEnum = z.enum([
+  "in_training",
+  "pending",
   "active",
   "inactive", 
   "leave_of_absence",
@@ -89,17 +91,54 @@ export const departmentPermissionsSchema = z.object({
 });
 export type DepartmentPermissions = z.infer<typeof departmentPermissionsSchema>;
 
+// Utility types for rank limit validation
+export type RankLimitInfo = {
+  rankId: number;
+  rankName: string;
+  departmentLimit: number | null; // null = unlimited
+  teamLimit: number | null; // null = use department limit
+  currentCount: number;
+  availableSlots: number | null; // null = unlimited
+  isAtCapacity: boolean;
+};
+
+export type RankLimitValidationResult = {
+  canPromote: boolean;
+  reason?: string;
+  departmentLimit?: number | null;
+  teamLimit?: number | null;
+  currentCount?: number;
+};
+
+// Zod schemas for rank limit management
+export const rankLimitSchema = z.object({
+  rankId: z.number().int().positive(),
+  maxMembers: z.number().int().min(0).optional().nullable(),
+});
+
+export const teamRankLimitSchema = z.object({
+  teamId: z.number().int().positive(),
+  rankId: z.number().int().positive(),
+  maxMembers: z.number().int().min(1), // Team limits must be at least 1 (not unlimited)
+});
+
 /**
  * Callsign Generation System
  * 
  * The callsign system follows this structure:
- * Format: [DEPARTMENT_PREFIX]-[TEAM_PREFIX]-[ID_NUMBER]
+ * Format: [RANK_CALLSIGN][DEPARTMENT_PREFIX]-[ID_NUMBER]([TEAM_PREFIX])
  * 
  * Examples:
- * - LSPD-UNI-425 (Los Santos Police Department, Uniform Patrol, ID #425)
- * - LSPD-SW-156 (Los Santos Police Department, SWAT, ID #156)  
- * - SAFD-EMS-678 (San Andreas Fire Department, EMS, ID #678)
- * - STAFF-ADM-234 (Staff Team, Admin, ID #234)
+ * - 1LSPD-425(UNI) (Rank 1 Los Santos Police Department, ID #425, Uniform Patrol)
+ * - 2LSPD-156(SW) (Rank 2 Los Santos Police Department, ID #156, SWAT)  
+ * - 3SAFD-678(EMS) (Rank 3 San Andreas Fire Department, ID #678, EMS)
+ * - 1STAFF-234(ADM) (Rank 1 Staff Team, ID #234, Admin)
+ * 
+ * Components:
+ * - Rank Callsign: Numerical identifier for rank hierarchy (1 = highest rank, increases downward)
+ * - Department Prefix: Short department identifier (e.g., "LSPD", "SAFD", "STAFF")
+ * - ID Number: Unique 3-digit number (100-999) per department
+ * - Team Prefix: Optional team identifier in parentheses (e.g., "UNI", "SW", "DET", "ADM")
  * 
  * ID Numbers:
  * - Range: 100-999 (900 total numbers per department)
@@ -108,17 +147,58 @@ export type DepartmentPermissions = z.infer<typeof departmentPermissionsSchema>;
  * 
  * Callsign Assignment Process:
  * 1. Member joins department → Get next available ID number (100-999)
- * 2. Member assigned to primary team → Generate callsign with team prefix
- * 3. Member changes teams → Callsign updates with new team prefix, same ID
- * 4. Member leaves → ID number becomes available for recycling
+ * 2. Member assigned rank → Get rank callsign for hierarchy position
+ * 3. Member assigned to primary team → Generate callsign with team prefix in parentheses
+ * 4. Member promoted/demoted → Callsign updates with new rank callsign
+ * 5. Member changes teams → Callsign updates with new team prefix, same rank and ID
+ * 6. Member leaves → ID number becomes available for recycling
  */
 export type CallsignComponents = {
+  rankCallsign: string; // e.g., "1", "2", "3" - numerical rank hierarchy
   departmentPrefix: string; // e.g., "LSPD", "SAFD", "STAFF"
-  teamPrefix?: string; // e.g., "UNI", "SW", "DET", "ADM" - optional
   idNumber: number; // 100-999
+  teamPrefix?: string; // e.g., "UNI", "SW", "DET", "ADM" - optional, shown in parentheses
 };
 
-export type GeneratedCallsign = string; // e.g., "LSPD-UNI-425"
+export type GeneratedCallsign = string; // e.g., "1LSPD-425(UNI)"
+
+/**
+ * Rank Limit System
+ * 
+ * The rank limit system allows departments and teams to control how many members 
+ * can hold specific ranks, enabling realistic hierarchy management.
+ * 
+ * Department-Level Limits:
+ * - Set in the `departmentRanks.maxMembers` field
+ * - Applies to the entire department across all teams
+ * - NULL value = unlimited members can hold this rank
+ * - Example: Only 1 Chief, 3 Captains, 10 Sergeants department-wide
+ * 
+ * Team-Level Limits (Override):
+ * - Set in the `departmentTeamRankLimits` table
+ * - Overrides department limits for specific teams
+ * - Must be a positive integer (cannot be unlimited at team level)
+ * - Example: SWAT team can only have 1 Captain, even if department allows 3
+ * 
+ * Validation Logic:
+ * 1. Check if team has specific limit for the rank
+ *    - If yes: use team limit
+ *    - If no: use department limit
+ * 2. If department limit is NULL: unlimited (no restriction)
+ * 3. Count current members with that rank in the scope (department or team)
+ * 4. Allow promotion only if under the limit
+ * 
+ * Use Cases:
+ * - Police Department: 1 Chief, 2 Assistant Chiefs, 5 Captains
+ * - SWAT Team: 1 SWAT Captain (overrides department Captain limit for this team)
+ * - Fire Department: 1 Fire Chief, 3 Battalion Chiefs, unlimited Firefighters
+ * - Staff Team: 1 Head Admin, 3 Senior Admins, unlimited Moderators
+ * 
+ * Examples:
+ * Department Rank: Captain (maxMembers: 5)
+ * Team Override: SWAT Captain (maxMembers: 1)
+ * Result: Department can have 5 Captains total, but SWAT can only have 1
+ */
 
 // Table for Departments
 export const departments = createDepartmentTable(
@@ -156,6 +236,7 @@ export const departmentRanks = createDepartmentTable(
     id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
     departmentId: d.integer("department_id").references(() => departments.id, { onDelete: "cascade" }).notNull(),
     name: d.varchar("name", { length: 256 }).notNull(),
+    callsign: d.varchar("callsign", { length: 10 }).notNull(), // e.g., "1", "2", "3" - numerical rank hierarchy identifier
     abbreviation: d.varchar("abbreviation", { length: 10 }), // e.g., "SGT", "LT", "CAPT"
     discordRoleId: d.varchar("discord_role_id", { length: 30 }).notNull().unique(), // Discord Role ID for this rank
     level: d.integer("level").notNull(), // Hierarchy level (higher = more senior)
@@ -181,6 +262,7 @@ export const departmentRanks = createDepartmentTable(
       "view_team_members": true
     }'::jsonb`),
     salary: d.integer("salary").default(0), // Optional salary/pay rate
+    maxMembers: d.integer("max_members"), // Maximum number of members that can hold this rank department-wide (null = unlimited)
     isActive: d.boolean("is_active").default(true).notNull(),
     createdAt: d
       .timestamp("created_at", { withTimezone: true })
@@ -191,8 +273,10 @@ export const departmentRanks = createDepartmentTable(
   (t) => [
     index("rank_dept_idx").on(t.departmentId),
     index("rank_level_idx").on(t.level),
+    index("rank_callsign_idx").on(t.callsign),
     index("rank_discord_role_idx").on(t.discordRoleId),
     unique("unique_rank_per_dept").on(t.departmentId, t.name),
+    unique("unique_rank_callsign_per_dept").on(t.departmentId, t.callsign),
   ]
 );
 
@@ -228,6 +312,30 @@ export const departmentTeams = createDepartmentTable(
 export type DepartmentTeam = typeof departmentTeams.$inferSelect;
 export type NewDepartmentTeam = typeof departmentTeams.$inferInsert;
 
+// Table for Team-Specific Rank Limits (overrides department-wide limits)
+export const departmentTeamRankLimits = createDepartmentTable(
+  "team_rank_limits",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    teamId: d.integer("team_id").references(() => departmentTeams.id, { onDelete: "cascade" }).notNull(),
+    rankId: d.integer("rank_id").references(() => departmentRanks.id, { onDelete: "cascade" }).notNull(),
+    maxMembers: d.integer("max_members").notNull(), // Maximum number of members that can hold this rank within this team (overrides department limit)
+    createdAt: d
+      .timestamp("created_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("team_rank_limit_team_idx").on(t.teamId),
+    index("team_rank_limit_rank_idx").on(t.rankId),
+    unique("unique_team_rank_limit").on(t.teamId, t.rankId),
+  ]
+);
+
+export type DepartmentTeamRankLimit = typeof departmentTeamRankLimits.$inferSelect;
+export type NewDepartmentTeamRankLimit = typeof departmentTeamRankLimits.$inferInsert;
+
 // Table for Department Members
 export const departmentMembers = createDepartmentTable(
   "members",
@@ -240,7 +348,7 @@ export const departmentMembers = createDepartmentTable(
     departmentIdNumber: d.integer("department_id_number").unique(), // Unique 3-digit number (100-999) - recyclable
     callsign: d.varchar("callsign", { length: 30 }), // Auto-generated: DEPT-TEAM-###
     primaryTeamId: d.integer("primary_team_id").references(() => departmentTeams.id, { onDelete: "set null" }), // Primary team for callsign generation
-    status: d.varchar("status", { length: 50, enum: departmentMemberStatusEnum.options }).default("active").notNull(),
+    status: d.varchar("status", { length: 50, enum: departmentMemberStatusEnum.options }).default("in_training").notNull(),
     hireDate: d.timestamp("hire_date", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
     lastActiveDate: d.timestamp("last_active_date", { withTimezone: true }),
     notes: d.text("notes"), // Internal notes about the member
@@ -493,6 +601,7 @@ export const departmentRanksRelations = relations(departmentRanks, ({ one, many 
   members: many(departmentMembers),
   promotionsFrom: many(departmentPromotionHistory, { relationName: "fromRank" }),
   promotionsTo: many(departmentPromotionHistory, { relationName: "toRank" }),
+  teamRankLimits: many(departmentTeamRankLimits),
 }));
 
 export const departmentTeamsRelations = relations(departmentTeams, ({ one, many }) => ({
@@ -502,6 +611,7 @@ export const departmentTeamsRelations = relations(departmentTeams, ({ one, many 
   }),
   memberships: many(departmentTeamMemberships),
   meetings: many(departmentMeetings),
+  rankLimits: many(departmentTeamRankLimits),
 }));
 
 export const departmentMembersRelations = relations(departmentMembers, ({ one, many }) => ({
@@ -536,6 +646,17 @@ export const departmentTeamMembershipsRelations = relations(departmentTeamMember
   team: one(departmentTeams, {
     fields: [departmentTeamMemberships.teamId],
     references: [departmentTeams.id],
+  }),
+}));
+
+export const departmentTeamRankLimitsRelations = relations(departmentTeamRankLimits, ({ one }) => ({
+  team: one(departmentTeams, {
+    fields: [departmentTeamRankLimits.teamId],
+    references: [departmentTeams.id],
+  }),
+  rank: one(departmentRanks, {
+    fields: [departmentTeamRankLimits.rankId],
+    references: [departmentRanks.id],
   }),
 }));
 

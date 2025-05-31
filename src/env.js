@@ -17,6 +17,7 @@ export const env = createEnv({
     DISCORD_CLIENT_SECRET: z.string(),
     INTERNAL_API_URL: z.string().url(),
     PG_URL: z.string().url(),
+    M2M_API_KEY: z.string(),
   },
 
   /**
@@ -43,6 +44,7 @@ export const env = createEnv({
     DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
     INTERNAL_API_URL: process.env.INTERNAL_API_URL,
     PG_URL: process.env.PG_URL,
+    M2M_API_KEY: process.env.M2M_API_KEY,
     // NEXT_PUBLIC_CLIENTVAR: process.env.NEXT_PUBLIC_CLIENTVAR,
   },
   /**

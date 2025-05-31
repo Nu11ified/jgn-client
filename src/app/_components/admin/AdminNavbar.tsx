@@ -4,11 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  Users, Shield, Link2, Ban, LayoutDashboard, UserSquare, Server, MessageSquareQuote, FileText
+  Users, Link2, Ban, LayoutDashboard, UserSquare, Server, MessageSquareQuote, FileText, Building
 } from "lucide-react";
 
 const navItems = [
   { href: "/admin", label: "Home", icon: LayoutDashboard },
+  { href: "/admin/departments", label: "Departments", icon: Building },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/servers", label: "Servers", icon: Server },
   { href: "/admin/roles", label: "Discord Roles", icon: UserSquare }, // Using UserSquare for Discord Roles

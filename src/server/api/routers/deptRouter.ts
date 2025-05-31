@@ -1,9 +1,15 @@
 import { z } from "zod";
-import { eq, and, desc, asc, isNull, isNotNull, sql } from "drizzle-orm";
+import { eq, and, desc, asc, isNull, isNotNull, sql, inArray } from "drizzle-orm";
 import { adminProcedure, protectedProcedure, publicProcedure, createTRPCRouter } from "@/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { postgrestDb } from "@/server/postgres";
 import * as deptSchema from "@/server/postgres/schema/department";
+import type { RankLimitInfo, RankLimitValidationResult } from "@/server/postgres/schema/department";
+import { env } from "@/env";
+import axios from "axios";
+
+const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
+const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
 
 // Zod validation schemas for input validation
 const createDepartmentSchema = z.object({
@@ -29,6 +35,7 @@ const updateDepartmentSchema = z.object({
 const createRankSchema = z.object({
   departmentId: z.number().int().positive(),
   name: z.string().min(1, "Rank name is required").max(256),
+  callsign: z.string().min(1, "Rank callsign is required").max(10),
   abbreviation: z.string().max(10).optional(),
   discordRoleId: z.string().min(1, "Discord Role ID is required").max(30),
   level: z.number().int().min(1, "Level must be at least 1"),
@@ -39,6 +46,7 @@ const createRankSchema = z.object({
 const updateRankSchema = z.object({
   id: z.number().int().positive(),
   name: z.string().min(1).max(256).optional(),
+  callsign: z.string().min(1).max(10).optional(),
   abbreviation: z.string().max(10).optional().nullable(),
   discordRoleId: z.string().min(1).max(30).optional(),
   level: z.number().int().min(1).optional(),
@@ -87,12 +95,12 @@ const updateMemberSchema = z.object({
 });
 
 // Utility function to generate callsign
-const generateCallsign = (departmentPrefix: string, teamPrefix?: string, idNumber?: number): string => {
-  if (!idNumber) return departmentPrefix;
+const generateCallsign = (rankCallsign: string, departmentPrefix: string, idNumber?: number, teamPrefix?: string): string => {
+  if (!idNumber) return `${rankCallsign}${departmentPrefix}`;
   if (teamPrefix) {
-    return `${departmentPrefix}-${teamPrefix}-${idNumber}`;
+    return `${rankCallsign}${departmentPrefix}-${idNumber}(${teamPrefix})`;
   }
-  return `${departmentPrefix}-${idNumber}`;
+  return `${rankCallsign}${departmentPrefix}-${idNumber}`;
 };
 
 // Utility function to get next available ID number for a department
@@ -140,6 +148,461 @@ const getNextAvailableIdNumber = async (departmentId: number): Promise<number> =
   });
 
   return nextId;
+};
+
+// Utility function to validate API key for training endpoints
+const validateApiKey = (apiKey: string): boolean => {
+  const validApiKey = process.env.DEPARTMENT_TRAINING_API_KEY;
+  if (!validApiKey) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Training API key not configured",
+    });
+  }
+  return apiKey === validApiKey;
+};
+
+// Training-related schemas
+const trainingCompletionSchema = z.object({
+  apiKey: z.string().min(1, "API key is required"),
+  discordId: z.string().min(1, "Discord ID is required"),
+  departmentId: z.number().int().positive(),
+});
+
+const assignTeamSchema = z.object({
+  memberId: z.number().int().positive(),
+  teamId: z.number().int().positive(),
+});
+
+const updateMemberStatusSchema = z.object({
+  memberId: z.number().int().positive(),
+  status: deptSchema.departmentMemberStatusEnum,
+});
+
+// Rank limit management schemas
+const setDepartmentRankLimitSchema = z.object({
+  rankId: z.number().int().positive(),
+  maxMembers: z.number().int().min(0).nullable(), // null = unlimited, 0+ = specific limit
+});
+
+const setTeamRankLimitSchema = z.object({
+  teamId: z.number().int().positive(),
+  rankId: z.number().int().positive(),
+  maxMembers: z.number().int().min(1), // Team limits must be at least 1 (cannot be unlimited)
+});
+
+const removeRankLimitSchema = z.object({
+  rankId: z.number().int().positive(),
+});
+
+const removeTeamRankLimitSchema = z.object({
+  teamId: z.number().int().positive(),
+  rankId: z.number().int().positive(),
+});
+
+const getRankLimitsSchema = z.object({
+  departmentId: z.number().int().positive(),
+  teamId: z.number().int().positive().optional(),
+});
+
+// Discord integration schemas
+const discordRoleActionSchema = z.object({
+  action: z.enum(['add', 'remove']),
+  user_discord_id: z.string(),
+  role_id: z.string(),
+  server_id: z.string(),
+});
+
+const discordRoleActionResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string().optional(),
+});
+
+const discordWebhookSchema = z.object({
+  apiKey: z.string().min(1, "API key is required"),
+  discordId: z.string().min(1, "Discord ID is required"),
+});
+
+const updateRankByDiscordIdSchema = z.object({
+  discordId: z.string().min(1, "Discord ID is required"),
+  departmentId: z.number().int().positive().optional(), // Optional to update all departments
+});
+
+// Utility function to call Discord role management API
+const manageDiscordRole = async (action: 'add' | 'remove', userDiscordId: string, roleId: string, serverId: string): Promise<void> => {
+  try {
+    if (!M2M_API_KEY) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "M2M API key not configured",
+      });
+    }
+
+    const response = await axios.post(
+      `${API_BASE_URL}/discord_role_router/manage`,
+      {
+        action,
+        user_discord_id: userDiscordId,
+        role_id: roleId,
+        server_id: serverId,
+      },
+      {
+        headers: { "X-API-Key": M2M_API_KEY },
+      }
+    );
+
+    console.log(`Discord role ${action} successful:`, response.data);
+  } catch (error) {
+    console.error(`Discord role ${action} failed:`, error);
+    // Don't throw error to prevent blocking database operations
+    // Just log the error for monitoring
+  }
+};
+
+// Utility function to get server ID from role ID
+const getServerIdFromRoleId = async (roleId: string): Promise<string | null> => {
+  try {
+    if (!M2M_API_KEY) {
+      return null;
+    }
+
+    const response = await axios.get(
+      `${API_BASE_URL}/admin/roles/${roleId}`,
+      {
+        headers: { "X-API-Key": M2M_API_KEY },
+      }
+    );
+
+    // Check if response.data exists and has server_id property
+    if (response.data && typeof response.data === 'object' && 'server_id' in response.data) {
+      const serverId = (response.data as { server_id: unknown }).server_id;
+      return typeof serverId === 'string' ? serverId : null;
+    }
+    return null;
+  } catch (error) {
+    console.error("Failed to get server ID from role ID:", error);
+    return null;
+  }
+};
+
+// Utility function to update user's rank based on their current Discord roles
+const updateUserRankFromDiscordRoles = async (discordId: string, departmentId?: number): Promise<{ 
+  success: boolean; 
+  updatedDepartments: Array<{ departmentId: number; newRankId: number | null; oldRankId: number | null; }>;
+  message: string;
+}> => {
+  try {
+    // Get user's current Discord roles
+    let userRoles: Array<{ roleId: string; serverId: string; }> = [];
+    
+    try {
+      if (M2M_API_KEY) {
+        const rolesResponse = await axios.get(
+          `${API_BASE_URL}/admin/user_server_roles/`,
+          {
+            params: { user_discord_id: discordId },
+            headers: { "X-API-Key": M2M_API_KEY },
+          }
+        );
+        userRoles = rolesResponse.data as Array<{ roleId: string; serverId: string; }> ?? [];
+      }
+    } catch (error) {
+      console.error("Failed to fetch user Discord roles:", error);
+      // Continue with empty roles array
+    }
+
+    // Get departments to check (either specific one or all where user is a member)
+    const departmentConditions = [eq(deptSchema.departmentMembers.discordId, discordId)];
+    if (departmentId) {
+      departmentConditions.push(eq(deptSchema.departmentMembers.departmentId, departmentId));
+    }
+
+    const memberships = await postgrestDb
+      .select({
+        departmentId: deptSchema.departmentMembers.departmentId,
+        memberId: deptSchema.departmentMembers.id,
+        currentRankId: deptSchema.departmentMembers.rankId,
+        discordGuildId: deptSchema.departments.discordGuildId,
+      })
+      .from(deptSchema.departmentMembers)
+      .innerJoin(deptSchema.departments, eq(deptSchema.departmentMembers.departmentId, deptSchema.departments.id))
+      .where(and(...departmentConditions, eq(deptSchema.departmentMembers.isActive, true)));
+
+    const updatedDepartments: Array<{ departmentId: number; newRankId: number | null; oldRankId: number | null; }> = [];
+
+    for (const membership of memberships) {
+      // Get all ranks for this department with their Discord role IDs
+      const departmentRanks = await postgrestDb
+        .select({
+          id: deptSchema.departmentRanks.id,
+          discordRoleId: deptSchema.departmentRanks.discordRoleId,
+          level: deptSchema.departmentRanks.level,
+        })
+        .from(deptSchema.departmentRanks)
+        .where(
+          and(
+            eq(deptSchema.departmentRanks.departmentId, membership.departmentId),
+            eq(deptSchema.departmentRanks.isActive, true),
+            isNotNull(deptSchema.departmentRanks.discordRoleId)
+          )
+        )
+        .orderBy(desc(deptSchema.departmentRanks.level)); // Highest level first
+
+      // Find the highest rank the user has based on their Discord roles
+      let newRankId: number | null = null;
+      
+      for (const rank of departmentRanks) {
+        const hasRole = userRoles.some(
+          userRole => userRole.roleId === rank.discordRoleId && userRole.serverId === membership.discordGuildId
+        );
+        
+        if (hasRole) {
+          newRankId = rank.id;
+          break; // Take the highest level rank they have
+        }
+      }
+
+      // Update rank if it has changed
+      if (newRankId !== membership.currentRankId) {
+        await postgrestDb
+          .update(deptSchema.departmentMembers)
+          .set({ rankId: newRankId })
+          .where(eq(deptSchema.departmentMembers.id, membership.memberId));
+
+        updatedDepartments.push({
+          departmentId: membership.departmentId,
+          newRankId,
+          oldRankId: membership.currentRankId,
+        });
+      }
+    }
+
+    return {
+      success: true,
+      updatedDepartments,
+      message: updatedDepartments.length > 0 
+        ? `Updated ranks in ${updatedDepartments.length} department(s)`
+        : "No rank changes needed",
+    };
+  } catch (error) {
+    console.error("Failed to update user rank from Discord roles:", error);
+    return {
+      success: false,
+      updatedDepartments: [],
+      message: "Failed to update ranks from Discord roles",
+    };
+  }
+};
+
+// Utility function to validate rank limits before promotion
+const validateRankLimit = async (
+  rankId: number,
+  departmentId: number,
+  teamId?: number
+): Promise<RankLimitValidationResult> => {
+  try {
+    // Get the rank and its department limit
+    const rank = await postgrestDb
+      .select({
+        id: deptSchema.departmentRanks.id,
+        name: deptSchema.departmentRanks.name,
+        maxMembers: deptSchema.departmentRanks.maxMembers,
+      })
+      .from(deptSchema.departmentRanks)
+      .where(
+        and(
+          eq(deptSchema.departmentRanks.id, rankId),
+          eq(deptSchema.departmentRanks.departmentId, departmentId)
+        )
+      )
+      .limit(1);
+
+    if (rank.length === 0) {
+      return {
+        canPromote: false,
+        reason: "Rank not found in department",
+      };
+    }
+
+    const rankData = rank[0]!;
+    let effectiveLimit = rankData.maxMembers;
+    let teamLimit: number | null = null;
+
+    // Check for team-specific override if teamId is provided
+    if (teamId) {
+      const teamRankLimit = await postgrestDb
+        .select()
+        .from(deptSchema.departmentTeamRankLimits)
+        .where(
+          and(
+            eq(deptSchema.departmentTeamRankLimits.teamId, teamId),
+            eq(deptSchema.departmentTeamRankLimits.rankId, rankId)
+          )
+        )
+        .limit(1);
+
+      if (teamRankLimit.length > 0) {
+        effectiveLimit = teamRankLimit[0]!.maxMembers;
+        teamLimit = teamRankLimit[0]!.maxMembers;
+      }
+    }
+
+    // If no limit (null), allow unlimited
+    if (effectiveLimit === null) {
+      return {
+        canPromote: true,
+        departmentLimit: rankData.maxMembers,
+        teamLimit,
+        currentCount: 0, // We don't need to count if unlimited
+      };
+    }
+
+    // Count current members with this rank in the appropriate scope
+    let currentCount: number;
+    
+    if (teamId && teamLimit !== null) {
+      // Count members in the specific team with this rank
+      const teamMemberCount = await postgrestDb
+        .select({ count: sql`count(*)` })
+        .from(deptSchema.departmentMembers)
+        .where(
+          and(
+            eq(deptSchema.departmentMembers.rankId, rankId),
+            eq(deptSchema.departmentMembers.primaryTeamId, teamId),
+            eq(deptSchema.departmentMembers.isActive, true)
+          )
+        );
+      currentCount = Number(teamMemberCount[0]?.count ?? 0);
+    } else {
+      // Count members in the entire department with this rank
+      const deptMemberCount = await postgrestDb
+        .select({ count: sql`count(*)` })
+        .from(deptSchema.departmentMembers)
+        .where(
+          and(
+            eq(deptSchema.departmentMembers.rankId, rankId),
+            eq(deptSchema.departmentMembers.departmentId, departmentId),
+            eq(deptSchema.departmentMembers.isActive, true)
+          )
+        );
+      currentCount = Number(deptMemberCount[0]?.count ?? 0);
+    }
+
+    const canPromote = currentCount < effectiveLimit;
+
+    return {
+      canPromote,
+      reason: canPromote 
+        ? "Promotion allowed" 
+        : `Rank limit reached (${currentCount}/${effectiveLimit})`,
+      departmentLimit: rankData.maxMembers,
+      teamLimit,
+      currentCount,
+    };
+  } catch (error) {
+    return {
+      canPromote: false,
+      reason: "Failed to validate rank limit",
+    };
+  }
+};
+
+// Utility function to get comprehensive rank limit information
+const getRankLimitInfo = async (
+  departmentId: number,
+  teamId?: number
+): Promise<RankLimitInfo[]> => {
+  try {
+    // Get all ranks for the department
+    const ranks = await postgrestDb
+      .select({
+        id: deptSchema.departmentRanks.id,
+        name: deptSchema.departmentRanks.name,
+        maxMembers: deptSchema.departmentRanks.maxMembers,
+      })
+      .from(deptSchema.departmentRanks)
+      .where(
+        and(
+          eq(deptSchema.departmentRanks.departmentId, departmentId),
+          eq(deptSchema.departmentRanks.isActive, true)
+        )
+      )
+      .orderBy(desc(deptSchema.departmentRanks.level));
+
+    const rankLimitInfos: RankLimitInfo[] = [];
+
+    for (const rank of ranks) {
+      let effectiveLimit = rank.maxMembers;
+      let teamLimit: number | null = null;
+
+      // Check for team-specific override if teamId is provided
+      if (teamId) {
+        const teamRankLimit = await postgrestDb
+          .select()
+          .from(deptSchema.departmentTeamRankLimits)
+          .where(
+            and(
+              eq(deptSchema.departmentTeamRankLimits.teamId, teamId),
+              eq(deptSchema.departmentTeamRankLimits.rankId, rank.id)
+            )
+          )
+          .limit(1);
+
+        if (teamRankLimit.length > 0) {
+          effectiveLimit = teamRankLimit[0]!.maxMembers;
+          teamLimit = teamRankLimit[0]!.maxMembers;
+        }
+      }
+
+      // Count current members with this rank
+      let currentCount: number;
+      
+      if (teamId && teamLimit !== null) {
+        // Count members in the specific team with this rank
+        const teamMemberCount = await postgrestDb
+          .select({ count: sql`count(*)` })
+          .from(deptSchema.departmentMembers)
+          .where(
+            and(
+              eq(deptSchema.departmentMembers.rankId, rank.id),
+              eq(deptSchema.departmentMembers.primaryTeamId, teamId),
+              eq(deptSchema.departmentMembers.isActive, true)
+            )
+          );
+        currentCount = Number(teamMemberCount[0]?.count ?? 0);
+      } else {
+        // Count members in the entire department with this rank
+        const deptMemberCount = await postgrestDb
+          .select({ count: sql`count(*)` })
+          .from(deptSchema.departmentMembers)
+          .where(
+            and(
+              eq(deptSchema.departmentMembers.rankId, rank.id),
+              eq(deptSchema.departmentMembers.departmentId, departmentId),
+              eq(deptSchema.departmentMembers.isActive, true)
+            )
+          );
+        currentCount = Number(deptMemberCount[0]?.count ?? 0);
+      }
+
+      rankLimitInfos.push({
+        rankId: rank.id,
+        rankName: rank.name,
+        departmentLimit: rank.maxMembers,
+        teamLimit,
+        currentCount,
+        availableSlots: effectiveLimit ? Math.max(0, effectiveLimit - currentCount) : null,
+        isAtCapacity: effectiveLimit ? currentCount >= effectiveLimit : false,
+      });
+    }
+
+    return rankLimitInfos;
+  } catch (error) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to get rank limit information",
+    });
+  }
 };
 
 export const deptRouter = createTRPCRouter({
@@ -463,6 +926,25 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
+            // Check for duplicate rank callsign within department
+            const existingCallsign = await postgrestDb
+              .select()
+              .from(deptSchema.departmentRanks)
+              .where(
+                and(
+                  eq(deptSchema.departmentRanks.departmentId, input.departmentId),
+                  eq(deptSchema.departmentRanks.callsign, input.callsign)
+                )
+              )
+              .limit(1);
+
+            if (existingCallsign.length > 0) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: "Rank with this callsign already exists in the department",
+              });
+            }
+
             // Check for duplicate Discord role ID
             const existingRole = await postgrestDb
               .select()
@@ -560,6 +1042,28 @@ export const deptRouter = createTRPCRouter({
                 throw new TRPCError({
                   code: "CONFLICT",
                   message: "Rank with this name already exists in the department",
+                });
+              }
+            }
+
+            // Check for callsign conflicts within department (if callsign is being updated)
+            if (updateData.callsign) {
+              const callsignConflict = await postgrestDb
+                .select()
+                .from(deptSchema.departmentRanks)
+                .where(
+                  and(
+                    eq(deptSchema.departmentRanks.departmentId, existingRank[0]!.departmentId),
+                    eq(deptSchema.departmentRanks.callsign, updateData.callsign),
+                    sql`${deptSchema.departmentRanks.id} != ${id}`
+                  )
+                )
+                .limit(1);
+
+              if (callsignConflict.length > 0) {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "Rank with this callsign already exists in the department",
                 });
               }
             }
@@ -673,7 +1177,21 @@ export const deptRouter = createTRPCRouter({
               .values(input)
               .returning();
 
-            return result[0];
+            const newTeam = result[0];
+            if (!newTeam) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "Failed to create team",
+              });
+            }
+
+            // If team has a Discord role ID, we don't need to create it
+            // The role should already exist in Discord and just be referenced here
+            if (newTeam.discordRoleId) {
+              console.log(`Team ${newTeam.name} created with Discord role ${newTeam.discordRoleId}`);
+            }
+
+            return newTeam;
           } catch (error) {
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
@@ -719,7 +1237,7 @@ export const deptRouter = createTRPCRouter({
           const { id, ...updateData } = input;
           
           try {
-            // Check if team exists
+            // Check if team exists and get current data
             const existingTeam = await postgrestDb
               .select()
               .from(deptSchema.departmentTeams)
@@ -733,13 +1251,71 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
+            const currentTeam = existingTeam[0]!;
+
+            // Update the team
             const result = await postgrestDb
               .update(deptSchema.departmentTeams)
               .set(updateData)
               .where(eq(deptSchema.departmentTeams.id, id))
               .returning();
 
-            return result[0];
+            const updatedTeam = result[0];
+            if (!updatedTeam) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "Failed to update team",
+              });
+            }
+
+            // Get department info for Discord operations
+            const department = await postgrestDb
+              .select({ discordGuildId: deptSchema.departments.discordGuildId })
+              .from(deptSchema.departments)
+              .where(eq(deptSchema.departments.id, updatedTeam.departmentId))
+              .limit(1);
+
+            if (department.length === 0) {
+              return updatedTeam; // Return early if no department found
+            }
+
+            const discordGuildId = department[0]!.discordGuildId;
+
+            // Handle Discord role changes
+            if (currentTeam.discordRoleId !== updatedTeam.discordRoleId) {
+              // Get all current team members
+              const teamMembers = await postgrestDb
+                .select({
+                  discordId: deptSchema.departmentMembers.discordId,
+                })
+                .from(deptSchema.departmentTeamMemberships)
+                .innerJoin(
+                  deptSchema.departmentMembers,
+                  eq(deptSchema.departmentTeamMemberships.memberId, deptSchema.departmentMembers.id)
+                )
+                .where(
+                  and(
+                    eq(deptSchema.departmentTeamMemberships.teamId, id),
+                    eq(deptSchema.departmentMembers.isActive, true)
+                  )
+                );
+
+              // Remove old Discord role from all members
+              if (currentTeam.discordRoleId) {
+                for (const member of teamMembers) {
+                  await manageDiscordRole('remove', member.discordId, currentTeam.discordRoleId, discordGuildId);
+                }
+              }
+
+              // Add new Discord role to all members
+              if (updatedTeam.discordRoleId) {
+                for (const member of teamMembers) {
+                  await manageDiscordRole('add', member.discordId, updatedTeam.discordRoleId, discordGuildId);
+                }
+              }
+            }
+
+            return updatedTeam;
           } catch (error) {
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
@@ -754,7 +1330,7 @@ export const deptRouter = createTRPCRouter({
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(async ({ input }) => {
           try {
-            // Check if team exists
+            // Check if team exists and get its data
             const existingTeam = await postgrestDb
               .select()
               .from(deptSchema.departmentTeams)
@@ -767,6 +1343,8 @@ export const deptRouter = createTRPCRouter({
                 message: "Team not found",
               });
             }
+
+            const team = existingTeam[0]!;
 
             // Check if team is assigned as primary team to any members
             const membersWithTeam = await postgrestDb
@@ -782,6 +1360,44 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
+            // Get department info for Discord operations
+            const department = await postgrestDb
+              .select({ discordGuildId: deptSchema.departments.discordGuildId })
+              .from(deptSchema.departments)
+              .where(eq(deptSchema.departments.id, team.departmentId))
+              .limit(1);
+
+            // Remove Discord role from all team members before deleting
+            if (team.discordRoleId && department.length > 0) {
+              const teamMembers = await postgrestDb
+                .select({
+                  discordId: deptSchema.departmentMembers.discordId,
+                })
+                .from(deptSchema.departmentTeamMemberships)
+                .innerJoin(
+                  deptSchema.departmentMembers,
+                  eq(deptSchema.departmentTeamMemberships.memberId, deptSchema.departmentMembers.id)
+                )
+                .where(
+                  and(
+                    eq(deptSchema.departmentTeamMemberships.teamId, input.id),
+                    eq(deptSchema.departmentMembers.isActive, true)
+                  )
+                );
+
+              const discordGuildId = department[0]!.discordGuildId;
+
+              for (const member of teamMembers) {
+                await manageDiscordRole('remove', member.discordId, team.discordRoleId, discordGuildId);
+              }
+            }
+
+            // Delete team memberships first (foreign key constraint)
+            await postgrestDb
+              .delete(deptSchema.departmentTeamMemberships)
+              .where(eq(deptSchema.departmentTeamMemberships.teamId, input.id));
+
+            // Delete the team
             await postgrestDb
               .delete(deptSchema.departmentTeams)
               .where(eq(deptSchema.departmentTeams.id, input.id));
@@ -792,6 +1408,317 @@ export const deptRouter = createTRPCRouter({
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
               message: "Failed to delete team",
+            });
+          }
+        }),
+
+      // Add member to team
+      addMember: adminProcedure
+        .input(z.object({
+          teamId: z.number().int().positive(),
+          memberId: z.number().int().positive(),
+          isLeader: z.boolean().default(false),
+        }))
+        .mutation(async ({ input }) => {
+          try {
+            // Verify team exists and get its data
+            const team = await postgrestDb
+              .select()
+              .from(deptSchema.departmentTeams)
+              .where(
+                and(
+                  eq(deptSchema.departmentTeams.id, input.teamId),
+                  eq(deptSchema.departmentTeams.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (team.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Team not found or inactive",
+              });
+            }
+
+            // Verify member exists and get their data
+            const member = await postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                departmentId: deptSchema.departmentMembers.departmentId,
+                isActive: deptSchema.departmentMembers.isActive,
+              })
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
+
+            if (member.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Member not found",
+              });
+            }
+
+            const memberData = member[0]!;
+
+            // Verify member is in the same department as the team
+            if (memberData.departmentId !== team[0]!.departmentId) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "Member and team must be in the same department",
+              });
+            }
+
+            // Check if member is already in this team
+            const existingMembership = await postgrestDb
+              .select()
+              .from(deptSchema.departmentTeamMemberships)
+              .where(
+                and(
+                  eq(deptSchema.departmentTeamMemberships.teamId, input.teamId),
+                  eq(deptSchema.departmentTeamMemberships.memberId, input.memberId)
+                )
+              )
+              .limit(1);
+
+            if (existingMembership.length > 0) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: "Member is already part of this team",
+              });
+            }
+
+            // Add team membership
+            const result = await postgrestDb
+              .insert(deptSchema.departmentTeamMemberships)
+              .values({
+                memberId: input.memberId,
+                teamId: input.teamId,
+                isLeader: input.isLeader,
+              })
+              .returning();
+
+            // Add Discord role if team has one and member is active
+            if (team[0]!.discordRoleId && memberData.isActive) {
+              const department = await postgrestDb
+                .select({ discordGuildId: deptSchema.departments.discordGuildId })
+                .from(deptSchema.departments)
+                .where(eq(deptSchema.departments.id, team[0]!.departmentId))
+                .limit(1);
+
+              if (department.length > 0) {
+                await manageDiscordRole(
+                  'add',
+                  memberData.discordId,
+                  team[0]!.discordRoleId,
+                  department[0]!.discordGuildId
+                );
+              }
+            }
+
+            return {
+              success: true,
+              membership: result[0],
+              message: `Member added to ${team[0]!.name} successfully`,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to add member to team",
+            });
+          }
+        }),
+
+      // Remove member from team
+      removeMember: adminProcedure
+        .input(z.object({
+          teamId: z.number().int().positive(),
+          memberId: z.number().int().positive(),
+        }))
+        .mutation(async ({ input }) => {
+          try {
+            // Verify membership exists and get team/member data
+            const membership = await postgrestDb
+              .select({
+                membershipId: deptSchema.departmentTeamMemberships.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                teamName: deptSchema.departmentTeams.name,
+                teamDiscordRoleId: deptSchema.departmentTeams.discordRoleId,
+                departmentId: deptSchema.departmentTeams.departmentId,
+                memberPrimaryTeamId: deptSchema.departmentMembers.primaryTeamId,
+              })
+              .from(deptSchema.departmentTeamMemberships)
+              .innerJoin(
+                deptSchema.departmentMembers,
+                eq(deptSchema.departmentTeamMemberships.memberId, deptSchema.departmentMembers.id)
+              )
+              .innerJoin(
+                deptSchema.departmentTeams,
+                eq(deptSchema.departmentTeamMemberships.teamId, deptSchema.departmentTeams.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentTeamMemberships.teamId, input.teamId),
+                  eq(deptSchema.departmentTeamMemberships.memberId, input.memberId)
+                )
+              )
+              .limit(1);
+
+            if (membership.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Team membership not found",
+              });
+            }
+
+            const membershipData = membership[0]!;
+
+            // Check if this is the member's primary team
+            if (membershipData.memberPrimaryTeamId === input.teamId) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: "Cannot remove member from their primary team. Please assign a different primary team first.",
+              });
+            }
+
+            // Remove team membership
+            await postgrestDb
+              .delete(deptSchema.departmentTeamMemberships)
+              .where(eq(deptSchema.departmentTeamMemberships.id, membershipData.membershipId));
+
+            // Remove Discord role if team has one
+            if (membershipData.teamDiscordRoleId) {
+              const department = await postgrestDb
+                .select({ discordGuildId: deptSchema.departments.discordGuildId })
+                .from(deptSchema.departments)
+                .where(eq(deptSchema.departments.id, membershipData.departmentId))
+                .limit(1);
+
+              if (department.length > 0) {
+                await manageDiscordRole(
+                  'remove',
+                  membershipData.discordId,
+                  membershipData.teamDiscordRoleId,
+                  department[0]!.discordGuildId
+                );
+              }
+            }
+
+            return {
+              success: true,
+              message: `Member removed from ${membershipData.teamName} successfully`,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to remove member from team",
+            });
+          }
+        }),
+
+      // Sync Discord roles for all team members
+      syncTeamDiscordRoles: adminProcedure
+        .input(z.object({
+          teamId: z.number().int().positive(),
+        }))
+        .mutation(async ({ input }) => {
+          try {
+            // Get team info
+            const team = await postgrestDb
+              .select({
+                id: deptSchema.departmentTeams.id,
+                name: deptSchema.departmentTeams.name,
+                discordRoleId: deptSchema.departmentTeams.discordRoleId,
+                departmentId: deptSchema.departmentTeams.departmentId,
+                isActive: deptSchema.departmentTeams.isActive,
+              })
+              .from(deptSchema.departmentTeams)
+              .where(eq(deptSchema.departmentTeams.id, input.teamId))
+              .limit(1);
+
+            if (team.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Team not found",
+              });
+            }
+
+            const teamData = team[0]!;
+
+            if (!teamData.discordRoleId) {
+              return {
+                success: true,
+                message: `Team ${teamData.name} has no Discord role configured`,
+                syncedMembers: 0,
+              };
+            }
+
+            // Get department Discord guild ID
+            const department = await postgrestDb
+              .select({ discordGuildId: deptSchema.departments.discordGuildId })
+              .from(deptSchema.departments)
+              .where(eq(deptSchema.departments.id, teamData.departmentId))
+              .limit(1);
+
+            if (department.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Department not found",
+              });
+            }
+
+            const discordGuildId = department[0]!.discordGuildId;
+
+            // Get all active team members
+            const teamMembers = await postgrestDb
+              .select({
+                discordId: deptSchema.departmentMembers.discordId,
+                callsign: deptSchema.departmentMembers.callsign,
+              })
+              .from(deptSchema.departmentTeamMemberships)
+              .innerJoin(
+                deptSchema.departmentMembers,
+                eq(deptSchema.departmentTeamMemberships.memberId, deptSchema.departmentMembers.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentTeamMemberships.teamId, input.teamId),
+                  eq(deptSchema.departmentMembers.isActive, true)
+                )
+              );
+
+            let syncedCount = 0;
+            const errors: string[] = [];
+
+            // Add Discord role to all team members
+            for (const member of teamMembers) {
+              try {
+                await manageDiscordRole(
+                  'add',
+                  member.discordId,
+                  teamData.discordRoleId,
+                  discordGuildId
+                );
+                syncedCount++;
+              } catch (error) {
+                errors.push(`Failed to sync role for ${member.callsign}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+              }
+            }
+
+            return {
+              success: true,
+              message: `Synced Discord roles for ${syncedCount} members of ${teamData.name}`,
+              syncedMembers: syncedCount,
+              totalMembers: teamMembers.length,
+              errors: errors.length > 0 ? errors : undefined,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to sync team Discord roles",
             });
           }
         }),
@@ -840,8 +1767,23 @@ export const deptRouter = createTRPCRouter({
             // Get next available ID number
             const departmentIdNumber = await getNextAvailableIdNumber(input.departmentId);
 
-            // Generate callsign
-            let callsign = department[0]!.callsignPrefix;
+            // Generate callsign - need rank callsign
+            let callsign: string;
+            let rankCallsign = "0"; // Default if no rank
+
+            // Get rank callsign if rank is provided
+            if (input.rankId) {
+              const rank = await postgrestDb
+                .select({ callsign: deptSchema.departmentRanks.callsign })
+                .from(deptSchema.departmentRanks)
+                .where(eq(deptSchema.departmentRanks.id, input.rankId))
+                .limit(1);
+              
+              if (rank.length > 0) {
+                rankCallsign = rank[0]!.callsign;
+              }
+            }
+
             if (input.primaryTeamId) {
               const team = await postgrestDb
                 .select()
@@ -851,15 +1793,16 @@ export const deptRouter = createTRPCRouter({
               
               if (team.length > 0 && team[0]!.callsignPrefix) {
                 callsign = generateCallsign(
+                  rankCallsign,
                   department[0]!.callsignPrefix,
-                  team[0]!.callsignPrefix,
-                  departmentIdNumber
+                  departmentIdNumber,
+                  team[0]!.callsignPrefix
                 );
               } else {
-                callsign = generateCallsign(department[0]!.callsignPrefix, undefined, departmentIdNumber);
+                callsign = generateCallsign(rankCallsign, department[0]!.callsignPrefix, departmentIdNumber);
               }
             } else {
-              callsign = generateCallsign(department[0]!.callsignPrefix, undefined, departmentIdNumber);
+              callsign = generateCallsign(rankCallsign, department[0]!.callsignPrefix, departmentIdNumber);
             }
 
             // Mark the ID number as unavailable
@@ -926,13 +1869,27 @@ export const deptRouter = createTRPCRouter({
             }
 
             const members = await postgrestDb
-              .select()
+              .select({
+                id: deptSchema.departmentMembers.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                callsign: deptSchema.departmentMembers.callsign,
+                badgeNumber: deptSchema.departmentMembers.badgeNumber,
+                status: deptSchema.departmentMembers.status,
+                hireDate: deptSchema.departmentMembers.hireDate,
+                rankName: deptSchema.departmentRanks.name,
+                rankLevel: deptSchema.departmentRanks.level,
+              })
               .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
               .where(and(...conditions))
               .orderBy(asc(deptSchema.departmentMembers.callsign));
-              
+
             return members;
           } catch (error) {
+            if (error instanceof TRPCError) throw error;
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
               message: "Failed to fetch members",
@@ -961,6 +1918,66 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
+            const currentMember = existingMember[0]!;
+
+            // Get department info for Discord operations
+            const department = await postgrestDb
+              .select({ 
+                callsignPrefix: deptSchema.departments.callsignPrefix,
+                discordGuildId: deptSchema.departments.discordGuildId 
+              })
+              .from(deptSchema.departments)
+              .where(eq(deptSchema.departments.id, currentMember.departmentId))
+              .limit(1);
+
+            if (department.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Department not found",
+              });
+            }
+
+            const departmentData = department[0]!;
+
+            // Handle Discord role changes for primary team changes
+            if (updateData.primaryTeamId !== undefined && updateData.primaryTeamId !== currentMember.primaryTeamId) {
+              // Remove old primary team Discord role if member had one
+              if (currentMember.primaryTeamId) {
+                const oldTeam = await postgrestDb
+                  .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
+                  .from(deptSchema.departmentTeams)
+                  .where(eq(deptSchema.departmentTeams.id, currentMember.primaryTeamId))
+                  .limit(1);
+
+                if (oldTeam.length > 0 && oldTeam[0]!.discordRoleId) {
+                  await manageDiscordRole(
+                    'remove',
+                    currentMember.discordId,
+                    oldTeam[0]!.discordRoleId,
+                    departmentData.discordGuildId
+                  );
+                }
+              }
+
+              // Add new primary team Discord role if new team has one
+              if (updateData.primaryTeamId) {
+                const newTeam = await postgrestDb
+                  .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
+                  .from(deptSchema.departmentTeams)
+                  .where(eq(deptSchema.departmentTeams.id, updateData.primaryTeamId))
+                  .limit(1);
+
+                if (newTeam.length > 0 && newTeam[0]!.discordRoleId) {
+                  await manageDiscordRole(
+                    'add',
+                    currentMember.discordId,
+                    newTeam[0]!.discordRoleId,
+                    departmentData.discordGuildId
+                  );
+                }
+              }
+            }
+
             // Prepare update data with proper null handling
             const memberUpdateData: Partial<Pick<typeof deptSchema.departmentMembers.$inferInsert, 'rankId' | 'badgeNumber' | 'primaryTeamId' | 'status' | 'notes' | 'isActive' | 'callsign'>> = {};
             
@@ -984,43 +2001,49 @@ export const deptRouter = createTRPCRouter({
               memberUpdateData.isActive = updateData.isActive;
             }
 
-            // If primary team is changing, update callsign
-            if (updateData.primaryTeamId !== undefined) {
-              const department = await postgrestDb
-                .select()
-                .from(deptSchema.departments)
-                .where(eq(deptSchema.departments.id, existingMember[0]!.departmentId))
-                .limit(1);
-
-              let newCallsign = department[0]!.callsignPrefix;
+            // If rank or team is changing, update callsign
+            if (updateData.rankId !== undefined || updateData.primaryTeamId !== undefined) {
+              // Determine the rank to use (new rank or current rank)
+              const rankIdToUse = updateData.rankId !== undefined ? updateData.rankId : currentMember.rankId;
               
-              if (updateData.primaryTeamId) {
+              // Determine the team to use (new team or current team)
+              const teamIdToUse = updateData.primaryTeamId !== undefined ? updateData.primaryTeamId : currentMember.primaryTeamId;
+
+              // Get rank callsign
+              let rankCallsign = "0"; // Default if no rank
+              if (rankIdToUse) {
+                const rank = await postgrestDb
+                  .select({ callsign: deptSchema.departmentRanks.callsign })
+                  .from(deptSchema.departmentRanks)
+                  .where(eq(deptSchema.departmentRanks.id, rankIdToUse))
+                  .limit(1);
+                
+                if (rank.length > 0) {
+                  rankCallsign = rank[0]!.callsign;
+                }
+              }
+
+              // Get team callsign if applicable
+              let teamCallsign: string | undefined;
+              if (teamIdToUse) {
                 const team = await postgrestDb
-                  .select()
+                  .select({ callsignPrefix: deptSchema.departmentTeams.callsignPrefix })
                   .from(deptSchema.departmentTeams)
-                  .where(eq(deptSchema.departmentTeams.id, updateData.primaryTeamId))
+                  .where(eq(deptSchema.departmentTeams.id, teamIdToUse))
                   .limit(1);
                 
                 if (team.length > 0 && team[0]!.callsignPrefix) {
-                  newCallsign = generateCallsign(
-                    department[0]!.callsignPrefix,
-                    team[0]!.callsignPrefix,
-                    existingMember[0]!.departmentIdNumber ?? undefined
-                  );
-                } else {
-                  newCallsign = generateCallsign(
-                    department[0]!.callsignPrefix,
-                    undefined,
-                    existingMember[0]!.departmentIdNumber ?? undefined
-                  );
+                  teamCallsign = team[0]!.callsignPrefix;
                 }
-              } else {
-                newCallsign = generateCallsign(
-                  department[0]!.callsignPrefix,
-                  undefined,
-                  existingMember[0]!.departmentIdNumber ?? undefined
-                );
               }
+
+              // Generate new callsign
+              const newCallsign = generateCallsign(
+                rankCallsign,
+                departmentData.callsignPrefix,
+                currentMember.departmentIdNumber ?? undefined,
+                teamCallsign
+              );
 
               memberUpdateData.callsign = newCallsign;
             }
@@ -1201,6 +2224,543 @@ export const deptRouter = createTRPCRouter({
           }
         }),
     }),
+
+    // Enhanced member management for training workflow
+    memberManagement: createTRPCRouter({
+      // Get members pending team assignment
+      getPendingMembers: adminProcedure
+        .input(z.object({ 
+          departmentId: z.number().int().positive(),
+          includeInTraining: z.boolean().default(false),
+        }))
+        .query(async ({ input }) => {
+          try {
+            const conditions = [
+              eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+              eq(deptSchema.departmentMembers.isActive, true),
+            ];
+
+            if (input.includeInTraining) {
+              conditions.push(
+                sql`${deptSchema.departmentMembers.status} = 'pending' OR ${deptSchema.departmentMembers.status} = 'in_training'`
+              );
+            } else {
+              conditions.push(eq(deptSchema.departmentMembers.status, "pending"));
+            }
+
+            const members = await postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                status: deptSchema.departmentMembers.status,
+                hireDate: deptSchema.departmentMembers.hireDate,
+                notes: deptSchema.departmentMembers.notes,
+                rankName: deptSchema.departmentRanks.name,
+                rankLevel: deptSchema.departmentRanks.level,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(and(...conditions))
+              .orderBy(asc(deptSchema.departmentMembers.hireDate));
+
+            return members;
+          } catch (error) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to fetch pending members",
+            });
+          }
+        }),
+
+      // Assign team to member (and activate them)
+      assignTeam: adminProcedure
+        .input(assignTeamSchema)
+        .mutation(async ({ input }) => {
+          try {
+            // Get member info
+            const member = await postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                departmentId: deptSchema.departmentMembers.departmentId,
+                departmentIdNumber: deptSchema.departmentMembers.departmentIdNumber,
+                status: deptSchema.departmentMembers.status,
+                rankId: deptSchema.departmentMembers.rankId,
+                primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
+              })
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
+
+            if (member.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Member not found",
+              });
+            }
+
+            const memberData = member[0]!;
+
+            // Verify team exists and is in same department
+            const team = await postgrestDb
+              .select()
+              .from(deptSchema.departmentTeams)
+              .where(
+                and(
+                  eq(deptSchema.departmentTeams.id, input.teamId),
+                  eq(deptSchema.departmentTeams.departmentId, memberData.departmentId),
+                  eq(deptSchema.departmentTeams.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (team.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Team not found or not in same department",
+              });
+            }
+
+            const teamData = team[0]!;
+
+            // Get department info for callsign generation and Discord operations
+            const department = await postgrestDb
+              .select()
+              .from(deptSchema.departments)
+              .where(eq(deptSchema.departments.id, memberData.departmentId))
+              .limit(1);
+
+            if (department.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Department not found",
+              });
+            }
+
+            const departmentData = department[0]!;
+
+            // Get member's current rank callsign
+            let rankCallsign = "0"; // Default if no rank
+            if (memberData.rankId) {
+              const rank = await postgrestDb
+                .select({ callsign: deptSchema.departmentRanks.callsign })
+                .from(deptSchema.departmentRanks)
+                .where(eq(deptSchema.departmentRanks.id, memberData.rankId))
+                .limit(1);
+              
+              if (rank.length > 0) {
+                rankCallsign = rank[0]!.callsign;
+              }
+            }
+
+            // Generate new callsign with team
+            const newCallsign = generateCallsign(
+              rankCallsign,
+              departmentData.callsignPrefix,
+              memberData.departmentIdNumber ?? undefined,
+              teamData.callsignPrefix ?? undefined
+            );
+
+            // Handle Discord role changes for primary team assignment
+            // Remove old primary team role if member had one
+            if (memberData.primaryTeamId && memberData.primaryTeamId !== input.teamId) {
+              const oldTeam = await postgrestDb
+                .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
+                .from(deptSchema.departmentTeams)
+                .where(eq(deptSchema.departmentTeams.id, memberData.primaryTeamId))
+                .limit(1);
+
+              if (oldTeam.length > 0 && oldTeam[0]!.discordRoleId) {
+                await manageDiscordRole(
+                  'remove',
+                  memberData.discordId,
+                  oldTeam[0]!.discordRoleId,
+                  departmentData.discordGuildId
+                );
+              }
+            }
+
+            // Update member with team assignment and activate
+            const result = await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({
+                primaryTeamId: input.teamId,
+                callsign: newCallsign,
+                status: "active",
+                lastActiveDate: new Date(),
+              })
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .returning();
+
+            // Add team membership if not already exists
+            const existingMembership = await postgrestDb
+              .select()
+              .from(deptSchema.departmentTeamMemberships)
+              .where(
+                and(
+                  eq(deptSchema.departmentTeamMemberships.memberId, input.memberId),
+                  eq(deptSchema.departmentTeamMemberships.teamId, input.teamId)
+                )
+              )
+              .limit(1);
+
+            if (existingMembership.length === 0) {
+              await postgrestDb
+                .insert(deptSchema.departmentTeamMemberships)
+                .values({
+                  memberId: input.memberId,
+                  teamId: input.teamId,
+                  isLeader: false,
+                });
+            }
+
+            // Add new primary team Discord role
+            if (teamData.discordRoleId) {
+              await manageDiscordRole(
+                'add',
+                memberData.discordId,
+                teamData.discordRoleId,
+                departmentData.discordGuildId
+              );
+            }
+
+            return {
+              success: true,
+              member: result[0],
+              message: `Member assigned to ${teamData.name} and activated successfully`,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to assign team",
+            });
+          }
+        }),
+
+      // Update member status (bypass training)
+      updateStatus: adminProcedure
+        .input(updateMemberStatusSchema)
+        .mutation(async ({ input }) => {
+          try {
+            const result = await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({ 
+                status: input.status,
+                lastActiveDate: new Date(),
+              })
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .returning();
+
+            if (result.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Member not found",
+              });
+            }
+
+            return {
+              success: true,
+              member: result[0],
+              message: `Member status updated to ${input.status}`,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to update member status",
+            });
+          }
+        }),
+
+      // Bypass training - move directly from in_training to pending
+      bypassTraining: adminProcedure
+        .input(z.object({ memberId: z.number().int().positive() }))
+        .mutation(async ({ input }) => {
+          try {
+            // Verify member is in training
+            const member = await postgrestDb
+              .select()
+              .from(deptSchema.departmentMembers)
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.id, input.memberId),
+                  eq(deptSchema.departmentMembers.status, "in_training")
+                )
+              )
+              .limit(1);
+
+            if (member.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Member not found or not in training",
+              });
+            }
+
+            const result = await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({ 
+                status: "pending",
+                lastActiveDate: new Date(),
+              })
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .returning();
+
+            return {
+              success: true,
+              member: result[0],
+              message: "Training bypassed. Member is now pending team assignment.",
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to bypass training",
+            });
+          }
+        }),
+    }),
+
+    // ===== RANK LIMIT MANAGEMENT =====
+    rankLimits: createTRPCRouter({
+      // Set department-wide rank limit
+      setDepartmentLimit: adminProcedure
+        .input(setDepartmentRankLimitSchema)
+        .mutation(async ({ input }) => {
+          try {
+            // Verify rank exists
+            const rank = await postgrestDb
+              .select()
+              .from(deptSchema.departmentRanks)
+              .where(eq(deptSchema.departmentRanks.id, input.rankId))
+              .limit(1);
+
+            if (rank.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Rank not found",
+              });
+            }
+
+            // Update the rank's max members limit
+            const result = await postgrestDb
+              .update(deptSchema.departmentRanks)
+              .set({ maxMembers: input.maxMembers })
+              .where(eq(deptSchema.departmentRanks.id, input.rankId))
+              .returning();
+
+            return {
+              success: true,
+              rank: result[0],
+              message: input.maxMembers === null 
+                ? "Rank limit removed (unlimited)" 
+                : `Rank limit set to ${input.maxMembers} members`,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to set department rank limit",
+            });
+          }
+        }),
+
+      // Remove department rank limit (set to unlimited)
+      removeDepartmentLimit: adminProcedure
+        .input(removeRankLimitSchema)
+        .mutation(async ({ input }) => {
+          try {
+            const result = await postgrestDb
+              .update(deptSchema.departmentRanks)
+              .set({ maxMembers: null })
+              .where(eq(deptSchema.departmentRanks.id, input.rankId))
+              .returning();
+
+            if (result.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Rank not found",
+              });
+            }
+
+            return {
+              success: true,
+              rank: result[0],
+              message: "Rank limit removed - unlimited members allowed",
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to remove department rank limit",
+            });
+          }
+        }),
+
+      // Set team-specific rank limit (override)
+      setTeamLimit: adminProcedure
+        .input(setTeamRankLimitSchema)
+        .mutation(async ({ input }) => {
+          try {
+            // Verify team and rank exist and are in same department
+            const teamRank = await postgrestDb
+              .select({
+                teamId: deptSchema.departmentTeams.id,
+                teamName: deptSchema.departmentTeams.name,
+                teamDeptId: deptSchema.departmentTeams.departmentId,
+                rankId: deptSchema.departmentRanks.id,
+                rankName: deptSchema.departmentRanks.name,
+                rankDeptId: deptSchema.departmentRanks.departmentId,
+              })
+              .from(deptSchema.departmentTeams)
+              .innerJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentTeams.departmentId, deptSchema.departmentRanks.departmentId)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentTeams.id, input.teamId),
+                  eq(deptSchema.departmentRanks.id, input.rankId)
+                )
+              )
+              .limit(1);
+
+            if (teamRank.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Team or rank not found, or they belong to different departments",
+              });
+            }
+
+            // Upsert team rank limit
+            const result = await postgrestDb
+              .insert(deptSchema.departmentTeamRankLimits)
+              .values({
+                teamId: input.teamId,
+                rankId: input.rankId,
+                maxMembers: input.maxMembers,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  deptSchema.departmentTeamRankLimits.teamId,
+                  deptSchema.departmentTeamRankLimits.rankId
+                ],
+                set: {
+                  maxMembers: input.maxMembers,
+                  updatedAt: new Date(),
+                },
+              })
+              .returning();
+
+            return {
+              success: true,
+              teamRankLimit: result[0],
+              message: `Team ${teamRank[0]!.teamName} rank limit set: ${input.maxMembers} ${teamRank[0]!.rankName}(s)`,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to set team rank limit",
+            });
+          }
+        }),
+
+      // Remove team rank limit (revert to department limit)
+      removeTeamLimit: adminProcedure
+        .input(removeTeamRankLimitSchema)
+        .mutation(async ({ input }) => {
+          try {
+            const result = await postgrestDb
+              .delete(deptSchema.departmentTeamRankLimits)
+              .where(
+                and(
+                  eq(deptSchema.departmentTeamRankLimits.teamId, input.teamId),
+                  eq(deptSchema.departmentTeamRankLimits.rankId, input.rankId)
+                )
+              )
+              .returning();
+
+            if (result.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Team rank limit not found",
+              });
+            }
+
+            return {
+              success: true,
+              message: "Team rank limit removed - will use department limit",
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to remove team rank limit",
+            });
+          }
+        }),
+
+      // Get rank limit information for a department/team
+      getRankLimits: adminProcedure
+        .input(getRankLimitsSchema)
+        .query(async ({ input }) => {
+          try {
+            const rankLimitInfo = await getRankLimitInfo(input.departmentId, input.teamId);
+            return rankLimitInfo;
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to get rank limits",
+            });
+          }
+        }),
+
+      // Check if a specific promotion would be allowed
+      checkPromotion: adminProcedure
+        .input(z.object({
+          memberId: z.number().int().positive(),
+          toRankId: z.number().int().positive(),
+        }))
+        .query(async ({ input }) => {
+          try {
+            // Get member info
+            const member = await postgrestDb
+              .select({
+                departmentId: deptSchema.departmentMembers.departmentId,
+                primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
+              })
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
+
+            if (member.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Member not found",
+              });
+            }
+
+            const validationResult = await validateRankLimit(
+              input.toRankId,
+              member[0]!.departmentId,
+              member[0]!.primaryTeamId ?? undefined
+            );
+
+            return validationResult;
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to check promotion eligibility",
+            });
+          }
+        }),
+    }),
   }),
 
   // ===== USER INTERACTIONS WITH PERMISSION RESTRICTIONS =====
@@ -1369,7 +2929,29 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Record the promotion in history
+            // Check rank limits before promotion
+            const memberInfo = await postgrestDb
+              .select({
+                primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
+              })
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
+
+            const rankLimitCheck = await validateRankLimit(
+              input.toRankId,
+              member.departmentId,
+              memberInfo[0]?.primaryTeamId ?? undefined
+            );
+
+            if (!rankLimitCheck.canPromote) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: `Promotion denied: ${rankLimitCheck.reason}`,
+              });
+            }
+
+            // Record the promotion in history (before Discord call for audit trail)
             await postgrestDb.insert(deptSchema.departmentPromotionHistory).values({
               memberId: input.memberId,
               fromRankId: member.currentRankId,
@@ -1379,14 +2961,62 @@ export const deptRouter = createTRPCRouter({
               notes: input.notes,
             });
 
-            // Update member's rank
-            const result = await postgrestDb
-              .update(deptSchema.departmentMembers)
-              .set({ rankId: input.toRankId })
-              .where(eq(deptSchema.departmentMembers.id, input.memberId))
-              .returning();
+            // Update Discord roles FIRST - this is the source of truth
+            try {
+              // Get department's Discord guild ID
+              const department = await postgrestDb
+                .select({ discordGuildId: deptSchema.departments.discordGuildId })
+                .from(deptSchema.departments)
+                .where(eq(deptSchema.departments.id, member.departmentId))
+                .limit(1);
 
-            return result[0];
+              if (department.length === 0) {
+                throw new TRPCError({
+                  code: "NOT_FOUND",
+                  message: "Department Discord configuration not found",
+                });
+              }
+
+              const serverId = department[0]!.discordGuildId;
+
+              // Remove old Discord role if it exists
+              if (member.currentRankId) {
+                const oldRank = await postgrestDb
+                  .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
+                  .from(deptSchema.departmentRanks)
+                  .where(eq(deptSchema.departmentRanks.id, member.currentRankId))
+                  .limit(1);
+
+                if (oldRank.length > 0 && oldRank[0]!.discordRoleId) {
+                  await manageDiscordRole('remove', member.discordId, oldRank[0]!.discordRoleId, serverId);
+                }
+              }
+
+              // Add new Discord role
+              if (targetRank[0]!.discordRoleId) {
+                await manageDiscordRole('add', member.discordId, targetRank[0]!.discordRoleId, serverId);
+              }
+
+              // Return success - webhook will update database when Discord bot detects changes
+              return {
+                success: true,
+                message: "Promotion successful. Discord roles updated.",
+                memberId: input.memberId,
+                fromRankId: member.currentRankId,
+                toRankId: input.toRankId,
+                discordId: member.discordId,
+              };
+
+            } catch (discordError) {
+              console.error("Discord role update failed for promotion:", discordError);
+              
+              // Discord failed - promotion fails
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "Failed to update Discord roles. Promotion cancelled.",
+                cause: discordError,
+              });
+            }
           } catch (error) {
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
@@ -1503,7 +3133,7 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Record the demotion in history
+            // Record the demotion in history (before Discord call for audit trail)
             await postgrestDb.insert(deptSchema.departmentPromotionHistory).values({
               memberId: input.memberId,
               fromRankId: member.currentRankId,
@@ -1513,14 +3143,62 @@ export const deptRouter = createTRPCRouter({
               notes: input.notes,
             });
 
-            // Update member's rank
-            const result = await postgrestDb
-              .update(deptSchema.departmentMembers)
-              .set({ rankId: input.toRankId })
-              .where(eq(deptSchema.departmentMembers.id, input.memberId))
-              .returning();
+            // Update Discord roles FIRST - this is the source of truth
+            try {
+              // Get department's Discord guild ID
+              const department = await postgrestDb
+                .select({ discordGuildId: deptSchema.departments.discordGuildId })
+                .from(deptSchema.departments)
+                .where(eq(deptSchema.departments.id, member.departmentId))
+                .limit(1);
 
-            return result[0];
+              if (department.length === 0) {
+                throw new TRPCError({
+                  code: "NOT_FOUND",
+                  message: "Department Discord configuration not found",
+                });
+              }
+
+              const serverId = department[0]!.discordGuildId;
+
+              // Remove old Discord role if it exists
+              if (member.currentRankId) {
+                const oldRank = await postgrestDb
+                  .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
+                  .from(deptSchema.departmentRanks)
+                  .where(eq(deptSchema.departmentRanks.id, member.currentRankId))
+                  .limit(1);
+
+                if (oldRank.length > 0 && oldRank[0]!.discordRoleId) {
+                  await manageDiscordRole('remove', member.discordId, oldRank[0]!.discordRoleId, serverId);
+                }
+              }
+
+              // Add new Discord role
+              if (targetRank[0]!.discordRoleId) {
+                await manageDiscordRole('add', member.discordId, targetRank[0]!.discordRoleId, serverId);
+              }
+
+              // Return success - webhook will update database when Discord bot detects changes
+              return {
+                success: true,
+                message: "Demotion successful. Discord roles updated.",
+                memberId: input.memberId,
+                fromRankId: member.currentRankId,
+                toRankId: input.toRankId,
+                discordId: member.discordId,
+              };
+
+            } catch (discordError) {
+              console.error("Discord role update failed for demotion:", discordError);
+              
+              // Discord failed - demotion fails
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "Failed to update Discord roles. Demotion cancelled.",
+                cause: discordError,
+              });
+            }
           } catch (error) {
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
@@ -2173,6 +3851,181 @@ export const deptRouter = createTRPCRouter({
             });
           }
         }),
+
+      // Get rank limits (read-only for users)
+      getRankLimits: protectedProcedure
+        .input(z.object({
+          departmentId: z.number().int().positive(),
+          teamId: z.number().int().positive().optional(),
+        }))
+        .query(async ({ ctx, input }) => {
+          try {
+            // Check if user is member of department
+            const member = await postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+                primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
+              })
+              .from(deptSchema.departmentMembers)
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.discordId, ctx.session.user.id),
+                  eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                  eq(deptSchema.departmentMembers.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (member.length === 0) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You are not a member of this department",
+              });
+            }
+
+            // Use provided teamId or user's primary team
+            const targetTeamId = input.teamId ?? member[0]!.primaryTeamId ?? undefined;
+
+            const rankLimitInfo = await getRankLimitInfo(input.departmentId, targetTeamId);
+            
+            return {
+              departmentId: input.departmentId,
+              teamId: targetTeamId,
+              ranks: rankLimitInfo,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to fetch rank limits",
+            });
+          }
+        }),
     }),
+  }),
+
+  // ===== DISCORD INTEGRATION ENDPOINTS =====
+  discord: createTRPCRouter({
+    // Webhook endpoint for Discord role changes (API key protected)
+    webhook: publicProcedure
+      .input(discordWebhookSchema)
+      .mutation(async ({ input }) => {
+        try {
+          // Validate API key (same as training API key for now)
+          if (!validateApiKey(input.apiKey)) {
+            throw new TRPCError({
+              code: "UNAUTHORIZED",
+              message: "Invalid API key",
+            });
+          }
+
+          // Update user's rank based on current Discord roles
+          const result = await updateUserRankFromDiscordRoles(input.discordId);
+
+          return {
+            success: result.success,
+            message: result.message,
+            updatedDepartments: result.updatedDepartments,
+          };
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to process Discord webhook",
+          });
+        }
+      }),
+
+    // Update user rank by Discord ID (API key protected)
+    updateRankByDiscordId: publicProcedure
+      .input(updateRankByDiscordIdSchema.extend({
+        apiKey: z.string().min(1, "API key is required"),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          // Validate API key
+          if (!validateApiKey(input.apiKey)) {
+            throw new TRPCError({
+              code: "UNAUTHORIZED",
+              message: "Invalid API key",
+            });
+          }
+
+          const result = await updateUserRankFromDiscordRoles(input.discordId, input.departmentId);
+
+          return {
+            success: result.success,
+            message: result.message,
+            updatedDepartments: result.updatedDepartments,
+          };
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to update rank by Discord ID",
+          });
+        }
+      }),
+  }),
+
+  // ===== PUBLIC TRAINING ENDPOINTS (API KEY PROTECTED) =====
+  training: createTRPCRouter({
+    // Complete training - move user from in_training to pending
+    completeTraining: publicProcedure
+      .input(trainingCompletionSchema)
+      .mutation(async ({ input }) => {
+        try {
+          // Validate API key
+          if (!validateApiKey(input.apiKey)) {
+            throw new TRPCError({
+              code: "UNAUTHORIZED",
+              message: "Invalid API key",
+            });
+          }
+
+          // Find the member
+          const member = await postgrestDb
+            .select()
+            .from(deptSchema.departmentMembers)
+            .where(
+              and(
+                eq(deptSchema.departmentMembers.discordId, input.discordId),
+                eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                eq(deptSchema.departmentMembers.isActive, true),
+                eq(deptSchema.departmentMembers.status, "in_training")
+              )
+            )
+            .limit(1);
+
+          if (member.length === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Member not found or not in training status",
+            });
+          }
+
+          // Update status to pending
+          const result = await postgrestDb
+            .update(deptSchema.departmentMembers)
+            .set({ 
+              status: "pending",
+              lastActiveDate: new Date(),
+            })
+            .where(eq(deptSchema.departmentMembers.id, member[0]!.id))
+            .returning();
+
+          return {
+            success: true,
+            member: result[0],
+            message: "Training completed successfully. Member is now pending team assignment.",
+          };
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to complete training",
+          });
+        }
+      }),
   }),
 });

@@ -8,6 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { 
   ArrowLeft, 
   Users,
@@ -20,17 +24,59 @@ import {
   GraduationCap,
   Settings,
   Edit,
+  Calendar,
+  Plus,
+  MapPin,
+  Video,
+  Shield,
+  Loader2,
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
+
+// Meeting form schema
+const createMeetingSchema = z.object({
+  title: z.string().min(1, "Meeting title is required").max(256),
+  description: z.string().optional(),
+  scheduledAt: z.string().min(1, "Date and time is required"),
+  location: z.string().optional(),
+  duration: z.number().min(1, "Duration must be at least 1 minute"),
+  isMandatory: z.boolean(),
+  teamId: z.number().optional(),
+  discordChannelId: z.string().optional(),
+  requiredRankLevel: z.number().optional(),
+});
+
+type CreateMeetingFormData = z.infer<typeof createMeetingSchema>;
 
 export default function TrainingManagementPage() {
   const params = useParams<{ departmentId: string }>();
   const departmentId = parseInt(params.departmentId);
 
   const [includeCompleted, setIncludeCompleted] = useState(false);
+  const [isCreateMeetingOpen, setIsCreateMeetingOpen] = useState(false);
+  const [viewPastMeetings, setViewPastMeetings] = useState(false);
 
   // Get department info
   const { data: departmentInfo } = api.dept.user.info.getDepartment.useQuery({ departmentId });
@@ -41,6 +87,35 @@ export default function TrainingManagementPage() {
     permission: 'manage_members'
   });
 
+  const { data: canScheduleMeetings } = api.dept.user.checkPermission.useQuery({ 
+    departmentId,
+    permission: 'schedule_meetings'
+  });
+
+  const { data: canManageMeetings } = api.dept.user.checkPermission.useQuery({ 
+    departmentId,
+    permission: 'manage_meetings'
+  });
+
+  // Get meetings data
+  const { data: meetings, isLoading: meetingsLoading, refetch: refetchMeetings } = api.dept.user.meetings.list.useQuery({
+    departmentId,
+    includePast: viewPastMeetings,
+    limit: 20,
+  });
+
+  // Get teams for meeting creation
+  const { data: teams } = api.dept.admin.teams.listByDepartment.useQuery({ 
+    departmentId,
+    includeInactive: false 
+  });
+
+  // Get ranks for meeting creation
+  const { data: ranks } = api.dept.admin.ranks.listByDepartment.useQuery({ 
+    departmentId,
+    includeInactive: false 
+  });
+
   // Get training management data
   const { data: trainingData, isLoading, error, refetch } = api.dept.user.info.getTrainingManagement.useQuery({
     departmentId,
@@ -49,6 +124,58 @@ export default function TrainingManagementPage() {
 
   // Get department stats
   const { data: stats } = api.dept.user.info.getDepartmentStats.useQuery({ departmentId });
+
+  // Meeting form
+  const meetingForm = useForm<CreateMeetingFormData>({
+    resolver: zodResolver(createMeetingSchema),
+    defaultValues: {
+      duration: 60,
+      isMandatory: false,
+    },
+  });
+
+  // Create meeting mutation
+  const createMeetingMutation = api.dept.user.meetings.create.useMutation({
+    onSuccess: () => {
+      toast.success("Meeting scheduled successfully");
+      meetingForm.reset();
+      setIsCreateMeetingOpen(false);
+      void refetchMeetings();
+    },
+    onError: (error) => {
+      toast.error(`Failed to create meeting: ${error.message}`);
+    },
+  });
+
+  const handleCreateMeeting = (data: CreateMeetingFormData) => {
+    createMeetingMutation.mutate({
+      ...data,
+      departmentId,
+      scheduledAt: new Date(data.scheduledAt),
+    });
+  };
+
+  const formatDateTime = (date: Date | string) => {
+    return new Date(date).toLocaleString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  const formatDuration = (minutes: number | null) => {
+    if (!minutes) return 'Unknown';
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hours > 0) {
+      return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    }
+    return `${mins}m`;
+  };
 
   const getStatusColor = (status: MemberStatus) => {
     switch (status) {
@@ -73,17 +200,6 @@ export default function TrainingManagementPage() {
       month: 'short',
       day: 'numeric'
     }).format(date);
-  };
-
-  const formatDateTime = (date: Date) => {
-    return new Date(date).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
   };
 
   if (error) {
@@ -120,9 +236,9 @@ export default function TrainingManagementPage() {
               </Button>
             </Link>
             <div>
-              <h1 className="text-3xl font-bold">Training Management</h1>
+              <h1 className="text-3xl font-bold">Department Management</h1>
               <p className="text-muted-foreground">
-                {departmentInfo?.name} - Manage new recruits and training workflow
+                {departmentInfo?.name} - Manage meetings and training workflow
               </p>
             </div>
           </div>
@@ -181,227 +297,433 @@ export default function TrainingManagementPage() {
           </div>
         )}
 
-        {/* Controls */}
+        {/* Meeting Management Section */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Settings className="h-5 w-5" />
-              View Options
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-primary" />
+                <CardTitle>Meeting Management</CardTitle>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="view-past-meetings"
+                    checked={viewPastMeetings}
+                    onCheckedChange={setViewPastMeetings}
+                  />
+                  <Label htmlFor="view-past-meetings" className="text-sm">
+                    Include past meetings
+                  </Label>
+                </div>
+                {canScheduleMeetings?.hasPermission && (
+                  <Dialog open={isCreateMeetingOpen} onOpenChange={setIsCreateMeetingOpen}>
+                    <DialogTrigger asChild>
+                      <Button>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Schedule Meeting
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-2xl">
+                      <DialogHeader>
+                        <DialogTitle>Schedule New Meeting</DialogTitle>
+                        <DialogDescription>
+                          Create a new meeting for your department or team.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <form onSubmit={meetingForm.handleSubmit(handleCreateMeeting)} className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="col-span-2">
+                            <Label htmlFor="title">Meeting Title *</Label>
+                            <Input
+                              id="title"
+                              {...meetingForm.register("title")}
+                              placeholder="e.g., Weekly Briefing"
+                            />
+                            {meetingForm.formState.errors.title && (
+                              <p className="text-sm text-destructive mt-1">
+                                {meetingForm.formState.errors.title.message}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="col-span-2">
+                            <Label htmlFor="description">Description</Label>
+                            <Textarea
+                              id="description"
+                              {...meetingForm.register("description")}
+                              placeholder="Meeting agenda or details..."
+                              rows={3}
+                            />
+                          </div>
+
+                          <div>
+                            <Label htmlFor="scheduledAt">Date & Time *</Label>
+                            <Input
+                              id="scheduledAt"
+                              type="datetime-local"
+                              {...meetingForm.register("scheduledAt")}
+                              min={new Date().toISOString().slice(0, 16)}
+                            />
+                            {meetingForm.formState.errors.scheduledAt && (
+                              <p className="text-sm text-destructive mt-1">
+                                {meetingForm.formState.errors.scheduledAt.message}
+                              </p>
+                            )}
+                          </div>
+
+                          <div>
+                            <Label htmlFor="duration">Duration (minutes)</Label>
+                            <Input
+                              id="duration"
+                              type="number"
+                              min="1"
+                              {...meetingForm.register("duration", { valueAsNumber: true })}
+                              placeholder="60"
+                            />
+                          </div>
+
+                          <div>
+                            <Label htmlFor="location">Location</Label>
+                            <Input
+                              id="location"
+                              {...meetingForm.register("location")}
+                              placeholder="e.g., Conference Room A, Discord Voice"
+                            />
+                          </div>
+
+                          <div>
+                            <Label htmlFor="discordChannelId">Discord Channel ID</Label>
+                            <Input
+                              id="discordChannelId"
+                              {...meetingForm.register("discordChannelId")}
+                              placeholder="Optional Discord channel ID"
+                            />
+                          </div>
+
+                          <div>
+                            <Label htmlFor="teamId">Team (Optional)</Label>
+                            <Select 
+                              value={meetingForm.watch("teamId")?.toString() ?? ""} 
+                              onValueChange={(value) => 
+                                meetingForm.setValue("teamId", value ? parseInt(value) : undefined)
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="All department (no team)" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="">All department</SelectItem>
+                                {teams?.map((team) => (
+                                  <SelectItem key={team.id} value={team.id.toString()}>
+                                    {team.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div>
+                            <Label htmlFor="requiredRankLevel">Minimum Rank Level</Label>
+                            <Select 
+                              value={meetingForm.watch("requiredRankLevel")?.toString() ?? ""} 
+                              onValueChange={(value) => 
+                                meetingForm.setValue("requiredRankLevel", value ? parseInt(value) : undefined)
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="All ranks" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="">All ranks</SelectItem>
+                                {ranks?.map((rank) => (
+                                  <SelectItem key={rank.id} value={rank.level.toString()}>
+                                    Level {rank.level}+ ({rank.name})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="col-span-2 flex items-center space-x-2">
+                            <Switch
+                              id="isMandatory"
+                              checked={meetingForm.watch("isMandatory")}
+                              onCheckedChange={(checked) => meetingForm.setValue("isMandatory", checked)}
+                            />
+                            <Label htmlFor="isMandatory">Mandatory attendance</Label>
+                          </div>
+                        </div>
+
+                        <DialogFooter>
+                          <Button 
+                            type="button" 
+                            variant="outline" 
+                            onClick={() => setIsCreateMeetingOpen(false)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button 
+                            type="submit" 
+                            disabled={createMeetingMutation.isPending}
+                          >
+                            {createMeetingMutation.isPending ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Scheduling...
+                              </>
+                            ) : (
+                              "Schedule Meeting"
+                            )}
+                          </Button>
+                        </DialogFooter>
+                      </form>
+                    </DialogContent>
+                  </Dialog>
+                )}
+              </div>
+            </div>
+            <CardDescription>
+              {canScheduleMeetings?.hasPermission 
+                ? "Schedule and manage department meetings" 
+                : "View department meetings"
+              }
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                id="include-completed"
-                checked={includeCompleted}
-                onChange={(e) => setIncludeCompleted(e.target.checked)}
-                className="h-4 w-4 rounded border-input bg-background text-primary focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-              />
-              <label htmlFor="include-completed" className="text-sm font-medium cursor-pointer">
-                Include recently activated members
-              </label>
-            </div>
+            {meetingsLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }, (_, i) => (
+                  <Skeleton key={i} className="h-20 w-full" />
+                ))}
+              </div>
+            ) : meetings && meetings.length > 0 ? (
+              <div className="space-y-4">
+                {meetings.map((meeting) => (
+                  <div key={meeting.id} className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <h4 className="font-medium">{meeting.title}</h4>
+                        {meeting.isMandatory && (
+                          <Badge variant="destructive">Mandatory</Badge>
+                        )}
+                        {meeting.teamName && (
+                          <Badge variant="secondary">{meeting.teamName}</Badge>
+                        )}
+                        <Badge variant={meeting.status === 'scheduled' ? 'default' : 'outline'}>
+                          {meeting.status.replace('_', ' ')}
+                        </Badge>
+                      </div>
+                      <div className="text-sm text-muted-foreground space-y-1">
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-1">
+                            <Calendar className="h-4 w-4" />
+                            <span>{formatDateTime(meeting.scheduledAt)}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-4 w-4" />
+                            <span>{formatDuration(meeting.duration)}</span>
+                          </div>
+                          {meeting.location && (
+                            <div className="flex items-center gap-1">
+                              <MapPin className="h-4 w-4" />
+                              <span>{meeting.location}</span>
+                            </div>
+                          )}
+                        </div>
+                        {meeting.description && (
+                          <p className="text-muted-foreground">{meeting.description}</p>
+                        )}
+                        <div className="flex items-center gap-1">
+                          <Users className="h-4 w-4" />
+                          <span>{typeof meeting.attendeeCount === 'number' ? meeting.attendeeCount : 0} attendees</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {(canManageMeetings?.hasPermission ?? (meeting.organizedBy === String(/* user's discord id would be here */))) && (
+                        <Button variant="outline" size="sm">
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No Meetings Scheduled</h3>
+                <p className="text-muted-foreground mb-4">
+                  {canScheduleMeetings?.hasPermission 
+                    ? "Schedule your first meeting to get started." 
+                    : "No meetings are currently scheduled."
+                  }
+                </p>
+                {canScheduleMeetings?.hasPermission && (
+                  <Button onClick={() => setIsCreateMeetingOpen(true)}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Schedule Meeting
+                  </Button>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {isLoading ? (
-          <div className="space-y-4">
-            {Array.from({ length: 3 }, (_, i: number) => (
-              <Card key={i}>
-                <CardHeader>
-                  <Skeleton className="h-6 w-48" />
-                  <Skeleton className="h-4 w-64" />
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {Array.from({ length: 3 }, (_, j: number) => (
-                      <Skeleton key={j} className="h-16 w-full" />
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+        <Separator />
+
+        {/* Training Management Section */}
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold mb-2">Training Management</h2>
+            <p className="text-muted-foreground">
+              Manage new recruits and training workflow
+            </p>
           </div>
-        ) : (
-          <div className="space-y-6">
-            {/* In Training Members */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Clock className="h-5 w-5 text-yellow-500" />
-                  In Training ({trainingData?.members.in_training?.length ?? 0})
-                </CardTitle>
-                <CardDescription>
-                  New recruits currently undergoing training
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {trainingData?.members.in_training?.length === 0 ? (
-                  <div className="text-center py-8">
-                    <GraduationCap className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <h3 className="text-lg font-semibold mb-2">No Members in Training</h3>
-                    <p className="text-muted-foreground">
-                      All new recruits have completed their training.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {trainingData?.members.in_training?.map((member) => (
-                      <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div className="flex items-center space-x-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h4 className="font-medium">
-                                {member.roleplayName ?? 'No Name'}
-                              </h4>
-                              <Badge className={getStatusColor(member.status)}>
-                                {formatStatus(member.status)}
-                              </Badge>
-                            </div>
-                            <div className="text-sm text-muted-foreground space-y-1">
-                              <p>Discord: {member.discordId}</p>
-                              <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
-                              <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
-                              {member.notes && (
-                                <p>Notes: {member.notes}</p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          {canManageMembers?.hasPermission && (
-                            <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
-                              <Button variant="outline" size="sm">
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            </Link>
-                          )}
-                          {trainingData?.canBypassTraining && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                // TODO: Implement bypass training
-                                toast.info("Bypass training functionality will be implemented");
-                              }}
-                            >
-                              <CheckCircle className="h-4 w-4 mr-2" />
-                              Skip Training
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
 
-            {/* Pending Assignment Members */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <UserX className="h-5 w-5 text-blue-500" />
-                  Pending Assignment ({trainingData?.members.pending?.length ?? 0})
-                </CardTitle>
-                <CardDescription>
-                  Members who completed training and need team assignment
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {trainingData?.members.pending?.length === 0 ? (
-                  <div className="text-center py-8">
-                    <UserCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <h3 className="text-lg font-semibold mb-2">No Pending Assignments</h3>
-                    <p className="text-muted-foreground">
-                      All members have been assigned to teams.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {trainingData?.members.pending?.map((member) => (
-                      <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div className="flex items-center space-x-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h4 className="font-medium">
-                                {member.roleplayName ?? 'No Name'}
-                              </h4>
-                              <Badge className={getStatusColor(member.status)}>
-                                {formatStatus(member.status)}
-                              </Badge>
-                              {member.rankName && (
-                                <Badge variant="outline">
-                                  {member.rankName} (Lvl {member.rankLevel})
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="text-sm text-muted-foreground space-y-1">
-                              <p>Discord: {member.discordId}</p>
-                              <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
-                              <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
-                              <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
-                              {member.notes && (
-                                <p>Notes: {member.notes}</p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          {canManageMembers?.hasPermission && (
-                            <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
-                              <Button variant="outline" size="sm">
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            </Link>
-                          )}
-                          {trainingData?.canAssignTeams && (
-                            <Button
-                              variant="default"
-                              size="sm"
-                              onClick={() => {
-                                // TODO: Implement team assignment
-                                toast.info("Team assignment functionality will be implemented");
-                              }}
-                            >
-                              <UserCheck className="h-4 w-4 mr-2" />
-                              Assign Team
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+          {/* Controls */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings className="h-5 w-5" />
+                View Options
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="include-completed"
+                  checked={includeCompleted}
+                  onChange={(e) => setIncludeCompleted(e.target.checked)}
+                  className="h-4 w-4 rounded border-input bg-background text-primary focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <label htmlFor="include-completed" className="text-sm font-medium cursor-pointer">
+                  Include recently activated members
+                </label>
+              </div>
+            </CardContent>
+          </Card>
 
-            {/* Recently Activated Members (if included) */}
-            {includeCompleted && trainingData?.members.active && (
+          {isLoading ? (
+            <div className="space-y-4">
+              {Array.from({ length: 3 }, (_, i: number) => (
+                <Card key={i}>
+                  <CardHeader>
+                    <Skeleton className="h-6 w-48" />
+                    <Skeleton className="h-4 w-64" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {Array.from({ length: 3 }, (_, j: number) => (
+                        <Skeleton key={j} className="h-16 w-full" />
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* In Training Members */}
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <UserCheck className="h-5 w-5 text-green-500" />
-                    Recently Activated ({trainingData.members.active.length})
+                    <Clock className="h-5 w-5 text-yellow-500" />
+                    In Training ({trainingData?.members.in_training?.length ?? 0})
                   </CardTitle>
                   <CardDescription>
-                    Members who were recently assigned and activated
+                    New recruits currently undergoing training
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {trainingData.members.active.length === 0 ? (
-                    <div className="text-center py-4">
+                  {trainingData?.members.in_training?.length === 0 ? (
+                    <div className="text-center py-8">
+                      <GraduationCap className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                      <h3 className="text-lg font-semibold mb-2">No Members in Training</h3>
                       <p className="text-muted-foreground">
-                        No recently activated members.
+                        All new recruits have completed their training.
                       </p>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {trainingData.members.active.map((member) => (
-                        <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
+                      {trainingData?.members.in_training?.map((member) => (
+                        <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
+                          <div className="flex items-center space-x-4">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <h4 className="font-medium">
+                                  {member.roleplayName ?? 'No Name'}
+                                </h4>
+                                <Badge className={getStatusColor(member.status)}>
+                                  {formatStatus(member.status)}
+                                </Badge>
+                              </div>
+                              <div className="text-sm text-muted-foreground space-y-1">
+                                <p>Discord: {member.discordId}</p>
+                                <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
+                                <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
+                                {member.notes && (
+                                  <p>Notes: {member.notes}</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center space-x-2">
+                            {canManageMembers?.hasPermission && (
+                              <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
+                                <Button variant="outline" size="sm">
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              </Link>
+                            )}
+                            {trainingData?.canBypassTraining && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  // TODO: Implement bypass training
+                                  toast.info("Bypass training functionality will be implemented");
+                                }}
+                              >
+                                <CheckCircle className="h-4 w-4 mr-2" />
+                                Skip Training
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Pending Assignment Members */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <UserX className="h-5 w-5 text-blue-500" />
+                    Pending Assignment ({trainingData?.members.pending?.length ?? 0})
+                  </CardTitle>
+                  <CardDescription>
+                    Members who completed training and need team assignment
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {trainingData?.members.pending?.length === 0 ? (
+                    <div className="text-center py-8">
+                      <UserCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                      <h3 className="text-lg font-semibold mb-2">No Pending Assignments</h3>
+                      <p className="text-muted-foreground">
+                        All members have been assigned to teams.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {trainingData?.members.pending?.map((member) => (
+                        <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
                           <div className="flex items-center space-x-4">
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-1">
@@ -416,17 +738,15 @@ export default function TrainingManagementPage() {
                                     {member.rankName} (Lvl {member.rankLevel})
                                   </Badge>
                                 )}
-                                {member.teamName && (
-                                  <Badge variant="secondary">
-                                    {member.teamName}
-                                  </Badge>
-                                )}
                               </div>
                               <div className="text-sm text-muted-foreground space-y-1">
                                 <p>Discord: {member.discordId}</p>
                                 <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
                                 <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
                                 <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
+                                {member.notes && (
+                                  <p>Notes: {member.notes}</p>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -439,7 +759,19 @@ export default function TrainingManagementPage() {
                                 </Button>
                               </Link>
                             )}
-                            <CheckCircle className="h-5 w-5 text-green-500" />
+                            {trainingData?.canAssignTeams && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={() => {
+                                  // TODO: Implement team assignment
+                                  toast.info("Team assignment functionality will be implemented");
+                                }}
+                              >
+                                <UserCheck className="h-4 w-4 mr-2" />
+                                Assign Team
+                              </Button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -447,9 +779,79 @@ export default function TrainingManagementPage() {
                   )}
                 </CardContent>
               </Card>
-            )}
-          </div>
-        )}
+
+              {/* Recently Activated Members (if included) */}
+              {includeCompleted && trainingData?.members.active && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <UserCheck className="h-5 w-5 text-green-500" />
+                      Recently Activated ({trainingData.members.active.length})
+                    </CardTitle>
+                    <CardDescription>
+                      Members who were recently assigned and activated
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {trainingData.members.active.length === 0 ? (
+                      <div className="text-center py-4">
+                        <p className="text-muted-foreground">
+                          No recently activated members.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {trainingData.members.active.map((member) => (
+                          <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
+                            <div className="flex items-center space-x-4">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h4 className="font-medium">
+                                    {member.roleplayName ?? 'No Name'}
+                                  </h4>
+                                  <Badge className={getStatusColor(member.status)}>
+                                    {formatStatus(member.status)}
+                                  </Badge>
+                                  {member.rankName && (
+                                    <Badge variant="outline">
+                                      {member.rankName} (Lvl {member.rankLevel})
+                                    </Badge>
+                                  )}
+                                  {member.teamName && (
+                                    <Badge variant="secondary">
+                                      {member.teamName}
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="text-sm text-muted-foreground space-y-1">
+                                  <p>Discord: {member.discordId}</p>
+                                  <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
+                                  <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
+                                  <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="flex items-center space-x-2">
+                              {canManageMembers?.hasPermission && (
+                                <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
+                                  <Button variant="outline" size="sm">
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                </Link>
+                              )}
+                              <CheckCircle className="h-5 w-5 text-green-500" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Quick Actions */}
         <Card>

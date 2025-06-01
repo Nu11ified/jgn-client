@@ -1376,6 +1376,9 @@ export const deptRouter = createTRPCRouter({
               console.log(`⚠️ Force deleting department with ${memberCount} active members`);
             }
 
+            // Helper function to add delay between steps
+            const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
             // Step 1: Soft delete all active members and clean up their Discord roles
             if (memberCount > 0) {
               console.log(`👥 Soft-deleting ${memberCount} active members...`);
@@ -1438,6 +1441,10 @@ export const deptRouter = createTRPCRouter({
                   console.error(`❌ Error processing member ${member.discordId}:`, memberError);
                 }
               }
+              
+              // Wait 2 seconds after processing all members
+              console.log(`⏳ Waiting 2 seconds before proceeding to team cleanup...`);
+              await delay(2000);
             }
 
             // Step 2: Remove all team memberships (will cascade automatically, but doing explicitly for clarity)
@@ -1450,6 +1457,10 @@ export const deptRouter = createTRPCRouter({
                   WHERE department_id = ${input.id}
                 )`
               );
+            
+            // Wait 2 seconds after team memberships cleanup
+            console.log(`⏳ Waiting 2 seconds before proceeding to rank limits cleanup...`);
+            await delay(2000);
 
             // Step 3: Delete all team rank limits
             console.log(`📊 Removing team rank limits...`);
@@ -1461,6 +1472,10 @@ export const deptRouter = createTRPCRouter({
                   WHERE department_id = ${input.id}
                 )`
               );
+            
+            // Wait 2 seconds after rank limits cleanup
+            console.log(`⏳ Waiting 2 seconds before proceeding to teams deletion...`);
+            await delay(2000);
 
             // Step 4: Delete all teams
             console.log(`👥 Deleting department teams...`);
@@ -1470,6 +1485,10 @@ export const deptRouter = createTRPCRouter({
               .returning({ id: deptSchema.departmentTeams.id, name: deptSchema.departmentTeams.name });
 
             console.log(`✅ Deleted ${teamsDeleted.length} teams`);
+            
+            // Wait 2 seconds after teams deletion
+            console.log(`⏳ Waiting 2 seconds before proceeding to ranks deletion...`);
+            await delay(2000);
 
             // Step 5: Delete all ranks
             console.log(`🎖️ Deleting department ranks...`);
@@ -1479,6 +1498,10 @@ export const deptRouter = createTRPCRouter({
               .returning({ id: deptSchema.departmentRanks.id, name: deptSchema.departmentRanks.name });
 
             console.log(`✅ Deleted ${ranksDeleted.length} ranks`);
+            
+            // Wait 2 seconds after ranks deletion
+            console.log(`⏳ Waiting 2 seconds before proceeding to meetings cleanup...`);
+            await delay(2000);
 
             // Step 6: Clean up meetings (cascade should handle this, but being explicit)
             console.log(`📅 Cleaning up meetings...`);
@@ -1497,12 +1520,20 @@ export const deptRouter = createTRPCRouter({
               .returning({ id: deptSchema.departmentMeetings.id, title: deptSchema.departmentMeetings.title });
 
             console.log(`✅ Deleted ${meetingsDeleted.length} meetings`);
+            
+            // Wait 2 seconds after meetings cleanup
+            console.log(`⏳ Waiting 2 seconds before proceeding to ID numbers cleanup...`);
+            await delay(2000);
 
             // Step 7: Clean up ID numbers
             console.log(`🔢 Cleaning up ID numbers...`);
             await postgrestDb
               .delete(deptSchema.departmentIdNumbers)
               .where(eq(deptSchema.departmentIdNumbers.departmentId, input.id));
+            
+            // Wait 2 seconds before final department deletion
+            console.log(`⏳ Waiting 2 seconds before final department deletion...`);
+            await delay(2000);
 
             // Step 8: Finally, soft delete the department
             console.log(`🏢 Soft-deleting department...`);

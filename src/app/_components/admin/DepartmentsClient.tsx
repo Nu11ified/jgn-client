@@ -115,8 +115,62 @@ export default function DepartmentsClient({ initialDepartments }: DepartmentsCli
   });
 
   const handleDeleteDepartment = async (departmentId: number) => {
-    if (confirm("Are you sure you want to delete this department? This action cannot be undone.")) {
+    const department = departments.find(d => d.id === departmentId);
+    if (!department) return;
+
+    // First attempt - try normal delete
+    const initialConfirm = confirm(
+      `Are you sure you want to delete "${department.name}"?\n\nThis action cannot be undone.`
+    );
+    
+    if (!initialConfirm) return;
+
+    try {
       await deleteDepartmentMutation.mutateAsync({ id: departmentId });
+    } catch (error: unknown) {
+      // Handle the case where there are active members
+      if (error && typeof error === 'object' && 'data' in error && 'message' in error) {
+        const errorData = error.data as { code?: string };
+        const errorMessage = error.message as string;
+        
+        if (errorData?.code === 'CONFLICT' && errorMessage?.includes('active members')) {
+          const memberCountMatch = /\d+/.exec(errorMessage);
+          const memberCount = memberCountMatch?.[0] ?? 'some';
+          
+          const forceConfirm = confirm(
+            `⚠️ FORCE DELETE WARNING ⚠️\n\n` +
+            `"${department.name}" has ${memberCount} active members.\n\n` +
+            `Force deletion will:\n` +
+            `• Remove all ${memberCount} members from the department\n` +
+            `• Remove their Discord roles\n` +
+            `• Delete all teams and ranks\n` +
+            `• Delete all meetings and data\n\n` +
+            `This action CANNOT be undone!\n\n` +
+            `Do you want to FORCE DELETE this department?`
+          );
+
+          if (forceConfirm) {
+            try {
+              await deleteDepartmentMutation.mutateAsync({ 
+                id: departmentId, 
+                force: true 
+              });
+              toast.success(`Department "${department.name}" force deleted successfully`);
+            } catch (forceError: unknown) {
+              const forceErrorMessage = forceError && typeof forceError === 'object' && 'message' in forceError 
+                ? (forceError.message as string) 
+                : 'Unknown error occurred';
+              toast.error(`Failed to force delete department: ${forceErrorMessage}`);
+            }
+          }
+        } else {
+          // Re-throw other errors to be handled by the mutation's onError
+          throw error;
+        }
+      } else {
+        // Re-throw unknown errors
+        throw error;
+      }
     }
   };
 

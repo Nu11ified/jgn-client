@@ -1326,9 +1326,12 @@ export const deptRouter = createTRPCRouter({
           }
         }),
 
-      // DELETE department (soft delete)
+      // DELETE department (cascade delete with proper cleanup)
       delete: adminProcedure
-        .input(z.object({ id: z.number().int().positive() }))
+        .input(z.object({ 
+          id: z.number().int().positive(),
+          force: z.boolean().default(false) // Force deletion even with active members
+        }))
         .mutation(async ({ input }) => {
           try {
             // Check if department exists
@@ -1345,34 +1348,184 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Check if department has active members
-            const activeMembers = await postgrestDb
-              .select()
+            const department = existingDept[0]!;
+
+            // Get count of active members for logging
+            const activeMembersCount = await postgrestDb
+              .select({ count: sql`count(*)` })
               .from(deptSchema.departmentMembers)
               .where(
                 and(
                   eq(deptSchema.departmentMembers.departmentId, input.id),
                   eq(deptSchema.departmentMembers.isActive, true)
                 )
-              )
-              .limit(1);
+              );
 
-            if (activeMembers.length > 0) {
+            const memberCount = Number(activeMembersCount[0]?.count ?? 0);
+
+            // If not forcing and there are active members, throw error
+            if (!input.force && memberCount > 0) {
               throw new TRPCError({
                 code: "CONFLICT",
-                message: "Cannot delete department with active members",
+                message: `Cannot delete department with ${memberCount} active members. Use force=true to override and remove all members.`,
               });
             }
 
-            // Soft delete (set isActive to false)
+            console.log(`🗑️ Starting cascade deletion of department "${department.name}" (ID: ${input.id})`);
+            if (memberCount > 0) {
+              console.log(`⚠️ Force deleting department with ${memberCount} active members`);
+            }
+
+            // Step 1: Soft delete all active members and clean up their Discord roles
+            if (memberCount > 0) {
+              console.log(`👥 Soft-deleting ${memberCount} active members...`);
+              
+              const activeMembers = await postgrestDb
+                .select({
+                  id: deptSchema.departmentMembers.id,
+                  discordId: deptSchema.departmentMembers.discordId,
+                  departmentIdNumber: deptSchema.departmentMembers.departmentIdNumber,
+                })
+                .from(deptSchema.departmentMembers)
+                .where(
+                  and(
+                    eq(deptSchema.departmentMembers.departmentId, input.id),
+                    eq(deptSchema.departmentMembers.isActive, true)
+                  )
+                );
+
+              // Remove Discord roles and soft delete members
+              for (const member of activeMembers) {
+                try {
+                  // Remove Discord roles
+                  const roleRemovalResult = await removeDiscordRolesForInactiveMember(
+                    member.discordId, 
+                    input.id
+                  );
+                  
+                  if (roleRemovalResult.success) {
+                    console.log(`✅ Removed Discord roles for member ${member.discordId}`);
+                  } else {
+                    console.warn(`⚠️ Failed to remove Discord roles for member ${member.discordId}: ${roleRemovalResult.message}`);
+                  }
+
+                  // Free up ID number
+                  if (member.departmentIdNumber) {
+                    await postgrestDb
+                      .update(deptSchema.departmentIdNumbers)
+                      .set({ 
+                        isAvailable: true,
+                        currentMemberId: null,
+                      })
+                      .where(
+                        and(
+                          eq(deptSchema.departmentIdNumbers.departmentId, input.id),
+                          eq(deptSchema.departmentIdNumbers.idNumber, member.departmentIdNumber)
+                        )
+                      );
+                  }
+
+                  // Soft delete member
+                  await postgrestDb
+                    .update(deptSchema.departmentMembers)
+                    .set({ 
+                      isActive: false,
+                      lastActiveDate: new Date()
+                    })
+                    .where(eq(deptSchema.departmentMembers.id, member.id));
+
+                } catch (memberError) {
+                  console.error(`❌ Error processing member ${member.discordId}:`, memberError);
+                }
+              }
+            }
+
+            // Step 2: Remove all team memberships (will cascade automatically, but doing explicitly for clarity)
+            console.log(`🏛️ Removing team memberships...`);
+            await postgrestDb
+              .delete(deptSchema.departmentTeamMemberships)
+              .where(
+                sql`${deptSchema.departmentTeamMemberships.memberId} IN (
+                  SELECT id FROM ${deptSchema.departmentMembers} 
+                  WHERE department_id = ${input.id}
+                )`
+              );
+
+            // Step 3: Delete all team rank limits
+            console.log(`📊 Removing team rank limits...`);
+            await postgrestDb
+              .delete(deptSchema.departmentTeamRankLimits)
+              .where(
+                sql`${deptSchema.departmentTeamRankLimits.teamId} IN (
+                  SELECT id FROM ${deptSchema.departmentTeams} 
+                  WHERE department_id = ${input.id}
+                )`
+              );
+
+            // Step 4: Delete all teams
+            console.log(`👥 Deleting department teams...`);
+            const teamsDeleted = await postgrestDb
+              .delete(deptSchema.departmentTeams)
+              .where(eq(deptSchema.departmentTeams.departmentId, input.id))
+              .returning({ id: deptSchema.departmentTeams.id, name: deptSchema.departmentTeams.name });
+
+            console.log(`✅ Deleted ${teamsDeleted.length} teams`);
+
+            // Step 5: Delete all ranks
+            console.log(`🎖️ Deleting department ranks...`);
+            const ranksDeleted = await postgrestDb
+              .delete(deptSchema.departmentRanks)
+              .where(eq(deptSchema.departmentRanks.departmentId, input.id))
+              .returning({ id: deptSchema.departmentRanks.id, name: deptSchema.departmentRanks.name });
+
+            console.log(`✅ Deleted ${ranksDeleted.length} ranks`);
+
+            // Step 6: Clean up meetings (cascade should handle this, but being explicit)
+            console.log(`📅 Cleaning up meetings...`);
+            await postgrestDb
+              .delete(deptSchema.departmentMeetingAttendance)
+              .where(
+                sql`${deptSchema.departmentMeetingAttendance.meetingId} IN (
+                  SELECT id FROM ${deptSchema.departmentMeetings} 
+                  WHERE department_id = ${input.id}
+                )`
+              );
+            
+            const meetingsDeleted = await postgrestDb
+              .delete(deptSchema.departmentMeetings)
+              .where(eq(deptSchema.departmentMeetings.departmentId, input.id))
+              .returning({ id: deptSchema.departmentMeetings.id, title: deptSchema.departmentMeetings.title });
+
+            console.log(`✅ Deleted ${meetingsDeleted.length} meetings`);
+
+            // Step 7: Clean up ID numbers
+            console.log(`🔢 Cleaning up ID numbers...`);
+            await postgrestDb
+              .delete(deptSchema.departmentIdNumbers)
+              .where(eq(deptSchema.departmentIdNumbers.departmentId, input.id));
+
+            // Step 8: Finally, soft delete the department
+            console.log(`🏢 Soft-deleting department...`);
             const result = await postgrestDb
               .update(deptSchema.departments)
               .set({ isActive: false })
               .where(eq(deptSchema.departments.id, input.id))
               .returning();
 
-            return result[0];
+            console.log(`✅ Department "${department.name}" successfully deleted`);
+
+            return {
+              ...result[0],
+              deletionSummary: {
+                membersProcessed: memberCount,
+                teamsDeleted: teamsDeleted.length,
+                ranksDeleted: ranksDeleted.length,
+                meetingsDeleted: meetingsDeleted.length,
+              }
+            };
+
           } catch (error) {
+            console.error(`❌ Error deleting department:`, error);
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",

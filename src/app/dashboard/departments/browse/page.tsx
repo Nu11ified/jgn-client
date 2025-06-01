@@ -260,7 +260,7 @@ export default function BrowseDepartmentsPage() {
 
                     <div className="flex gap-2">
                       <Link 
-                        href={`/dashboard/departments/browse/${department.id}`}
+                        href={`/dashboard/departments/${department.id}`}
                         className="flex-1"
                       >
                         <Button variant="outline" size="sm" className="w-full">
@@ -271,7 +271,7 @@ export default function BrowseDepartmentsPage() {
                       
                       {!Boolean(department.isAlreadyMember) && (
                         <Link 
-                          href={`/dashboard/departments/browse/${department.id}/join`}
+                          href={`/dashboard/departments/${department.id}`}
                         >
                           <Button size="sm">
                             Join

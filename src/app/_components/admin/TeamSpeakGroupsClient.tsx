@@ -106,7 +106,7 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
     filteredData: filteredGroups, 
   } = useTableControls<TsGroup>({
     data: allFetchedGroups, 
-    searchKeys: ['name', 'sgid'],
+    searchKeys: ['name', 'group_id'],
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -181,13 +181,13 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
           </div>
         </div>
         <CardDescription>
-          View all TeamSpeak server groups in the system. Use the search bar to filter by name or SGID.
+          View all TeamSpeak server groups in the system. Use the search bar to filter by name or Group ID.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="mb-4 flex items-center gap-2">
           <Input
-            placeholder="Search groups by name or SGID..."
+            placeholder="Search groups by name or Group ID..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
             className="max-w-xs"
@@ -201,7 +201,7 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
             <TableHeader className="sticky top-0 bg-background z-10">
               <TableRow>
                 <TableHead>Group Name</TableHead>
-                <TableHead>SGID</TableHead>
+                <TableHead>Group ID</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -222,12 +222,12 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
                 if (!group) return null;
                 return (
                   <TableRow 
-                    key={group.sgid}
+                    key={group.group_id}
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                   >
                     <TableCell>{group.name}</TableCell>
-                    <TableCell>{group.sgid}</TableCell>
+                    <TableCell>{group.group_id}</TableCell>
                   </TableRow>
                 );
               })}

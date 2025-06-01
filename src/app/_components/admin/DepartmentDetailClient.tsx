@@ -108,6 +108,7 @@ const createTeamFormSchema = z.object({
 
 const createMemberFormSchema = z.object({
   discordId: z.string().min(1, "Discord ID is required"),
+  roleplayName: z.string().max(100).optional(),
   rankId: z.number().int().positive().optional(),
   badgeNumber: z.string().max(20).optional(),
   primaryTeamId: z.number().int().positive().optional(),
@@ -149,6 +150,49 @@ const MEMBER_STATUS_LABELS = {
   blacklisted: "Blacklisted"
 } as const;
 
+// Add type definitions for sync results based on the actual return types from deptRouter.ts
+type SyncResultItem = {
+  success: boolean;
+  updatedDepartments: Array<{ 
+    departmentId: number; 
+    newRankId?: number | null; 
+    oldRankId?: number | null; 
+    newTeamId?: number | null; 
+    oldTeamId?: number | null; 
+  }>;
+  message: string;
+};
+
+type CreateMemberSyncResults = {
+  rankSync: SyncResultItem | null;
+  teamSync: SyncResultItem | null;
+};
+
+type CreateMemberResult = {
+  syncResults?: CreateMemberSyncResults;
+};
+
+// Helper function to check if an object has the expected sync result structure
+const isSyncResultItem = (obj: unknown): obj is SyncResultItem => {
+  return typeof obj === 'object' && 
+    obj !== null && 
+    'success' in obj && 
+    'updatedDepartments' in obj && 
+    'message' in obj &&
+    typeof (obj as Record<string, unknown>).success === 'boolean' &&
+    Array.isArray((obj as Record<string, unknown>).updatedDepartments) &&
+    typeof (obj as Record<string, unknown>).message === 'string';
+};
+
+// Helper function to check if syncResults has the expected structure
+const hasSyncResults = (result: unknown): result is { syncResults: CreateMemberSyncResults } => {
+  return typeof result === 'object' && 
+    result !== null && 
+    'syncResults' in result &&
+    typeof (result as Record<string, unknown>).syncResults === 'object' &&
+    (result as Record<string, unknown>).syncResults !== null;
+};
+
 export default function DepartmentDetailClient({ department: initialDepartment }: DepartmentDetailClientProps) {
   const [department, setDepartment] = useState(initialDepartment);
   const [activeTab, setActiveTab] = useState("overview");
@@ -161,10 +205,12 @@ export default function DepartmentDetailClient({ department: initialDepartment }
   const [isEditDepartmentDialogOpen, setIsEditDepartmentDialogOpen] = useState(false);
   const [isEditRankDialogOpen, setIsEditRankDialogOpen] = useState(false);
   const [isEditTeamDialogOpen, setIsEditTeamDialogOpen] = useState(false);
+  const [isEditMemberDialogOpen, setIsEditMemberDialogOpen] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<{ id: number; name: string } | null>(null);
   const [selectedMemberToAdd, setSelectedMemberToAdd] = useState<string>("");
   const [selectedRank, setSelectedRank] = useState<NonNullable<DepartmentWithRelations['ranks']>[0] | null>(null);
   const [selectedTeamForEdit, setSelectedTeamForEdit] = useState<NonNullable<DepartmentWithRelations['teams']>[0] | null>(null);
+  const [selectedMember, setSelectedMember] = useState<NonNullable<DepartmentWithRelations['members']>[0] | null>(null);
 
   const trpcUtils = api.useUtils();
 
@@ -277,6 +323,16 @@ export default function DepartmentDetailClient({ department: initialDepartment }
   });
 
   const addMemberForm = useForm<CreateMemberFormData>({
+    resolver: zodResolver(createMemberFormSchema),
+    defaultValues: {
+      discordId: "",
+      badgeNumber: "",
+      notes: "",
+      status: "pending",
+    }
+  });
+
+  const editMemberForm = useForm<CreateMemberFormData>({
     resolver: zodResolver(createMemberFormSchema),
     defaultValues: {
       discordId: "",
@@ -450,8 +506,30 @@ export default function DepartmentDetailClient({ department: initialDepartment }
 
   // Create member mutation
   const createMemberMutation = api.dept.admin.members.create.useMutation({
-    onSuccess: () => {
-      toast.success("Member added successfully");
+    onSuccess: (result) => {
+      // Show detailed success message based on what was synced
+      let successMessage = "Member added successfully";
+      
+      // Use type-safe checking for syncResults with proper type guards
+      if (hasSyncResults(result)) {
+        const { rankSync, teamSync } = result.syncResults;
+        
+        if (rankSync && typeof rankSync === 'object' && 'success' in rankSync && 'updatedDepartments' in rankSync) {
+          const typedRankSync = rankSync as SyncResultItem;
+          if (typedRankSync.success && typedRankSync.updatedDepartments.length > 0) {
+            successMessage += ". Rank synced from Discord roles";
+          }
+        }
+        
+        if (teamSync && typeof teamSync === 'object' && 'success' in teamSync && 'updatedDepartments' in teamSync) {
+          const typedTeamSync = teamSync as SyncResultItem;
+          if (typedTeamSync.success && typedTeamSync.updatedDepartments.length > 0) {
+            successMessage += ". Team synced from Discord roles";
+          }
+        }
+      }
+      
+      toast.success(successMessage);
       addMemberForm.reset();
       setIsAddMemberDialogOpen(false);
       // Invalidate multiple queries to ensure full refresh
@@ -463,6 +541,73 @@ export default function DepartmentDetailClient({ department: initialDepartment }
     },
     onError: (error) => {
       toast.error(`Failed to add member: ${error.message}`);
+    }
+  });
+
+  // Update member mutation
+  const updateMemberMutation = api.dept.admin.members.update.useMutation({
+    onSuccess: () => {
+      toast.success("Member updated successfully");
+      editMemberForm.reset();
+      setIsEditMemberDialogOpen(false);
+      setSelectedMember(null);
+      // Invalidate multiple queries to ensure full refresh
+      void trpcUtils.dept.admin.departments.getById.invalidate({ id: department.id });
+      void trpcUtils.dept.admin.members.listByDepartment.invalidate({ departmentId: department.id });
+      void trpcUtils.dept.admin.departments.list.invalidate();
+      // Also trigger immediate refetch
+      void refetchDepartment();
+    },
+    onError: (error) => {
+      toast.error(`Failed to update member: ${error.message}`);
+    }
+  });
+
+  // Delete member mutation
+  const deleteMemberMutation = api.dept.admin.members.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Member deleted successfully");
+      // Invalidate multiple queries to ensure full refresh
+      void trpcUtils.dept.admin.departments.getById.invalidate({ id: department.id });
+      void trpcUtils.dept.admin.members.listByDepartment.invalidate({ departmentId: department.id });
+      void trpcUtils.dept.admin.departments.list.invalidate();
+      // Also trigger immediate refetch
+      void refetchDepartment();
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete member: ${error.message}`);
+    }
+  });
+
+  // Reactivate member mutation
+  const reactivateMemberMutation = api.dept.admin.members.update.useMutation({
+    onSuccess: () => {
+      toast.success("Member reactivated successfully");
+      // Invalidate multiple queries to ensure full refresh
+      void trpcUtils.dept.admin.departments.getById.invalidate({ id: department.id });
+      void trpcUtils.dept.admin.members.listByDepartment.invalidate({ departmentId: department.id });
+      void trpcUtils.dept.admin.departments.list.invalidate();
+      // Also trigger immediate refetch
+      void refetchDepartment();
+    },
+    onError: (error) => {
+      toast.error(`Failed to reactivate member: ${error.message}`);
+    }
+  });
+
+  // Hard delete member mutation (permanent removal)
+  const hardDeleteMemberMutation = api.dept.admin.members.hardDelete.useMutation({
+    onSuccess: () => {
+      toast.success("Member permanently deleted");
+      // Invalidate multiple queries to ensure full refresh
+      void trpcUtils.dept.admin.departments.getById.invalidate({ id: department.id });
+      void trpcUtils.dept.admin.members.listByDepartment.invalidate({ departmentId: department.id });
+      void trpcUtils.dept.admin.departments.list.invalidate();
+      // Also trigger immediate refetch
+      void refetchDepartment();
+    },
+    onError: (error) => {
+      toast.error(`Failed to permanently delete member: ${error.message}`);
     }
   });
 
@@ -510,30 +655,51 @@ export default function DepartmentDetailClient({ department: initialDepartment }
   const handleConfirmAddMember = async () => {
     if (!selectedTeam || !selectedMemberToAdd) return;
     
-    await addMemberToTeamMutation.mutateAsync({
+    console.log("Adding member to team:", {
       teamId: selectedTeam.id,
       memberId: parseInt(selectedMemberToAdd),
-      isLeader: false
+      teamName: selectedTeam.name
     });
+    
+    try {
+      const result = await addMemberToTeamMutation.mutateAsync({
+        teamId: selectedTeam.id,
+        memberId: parseInt(selectedMemberToAdd),
+        isLeader: false
+      });
+      console.log("Add member result:", result);
+    } catch (error) {
+      console.error("Error adding member to team:", error);
+    }
   };
 
   // Get team members for the selected team
   const getTeamMembers = () => {
-    if (!selectedTeam || !department.members) return [];
+    if (!selectedTeam || !department.members || !department.teamMemberships) return [];
     
+    // Get member IDs that are in this team
+    const teamMemberIds = department.teamMemberships
+      .filter(membership => membership.teamId === selectedTeam.id)
+      .map(membership => membership.memberId);
+    
+    // Return members that are in this team
     return department.members.filter(member => 
-      member.primaryTeamId === selectedTeam.id || 
-      // You might want to query team memberships here if you have that data
-      false
+      teamMemberIds.includes(member.id)
     );
   };
 
   // Get available members to add to team (not already in the team)
   const getAvailableMembers = () => {
-    if (!selectedTeam || !department.members) return [];
+    if (!selectedTeam || !department.members || !department.teamMemberships) return [];
     
+    // Get member IDs that are already in this team
+    const teamMemberIds = department.teamMemberships
+      .filter(membership => membership.teamId === selectedTeam.id)
+      .map(membership => membership.memberId);
+    
+    // Return active members that are not already in this team
     return department.members.filter(member => 
-      member.isActive && member.primaryTeamId !== selectedTeam.id
+      member.isActive && !teamMemberIds.includes(member.id)
     );
   };
 
@@ -599,10 +765,75 @@ export default function DepartmentDetailClient({ department: initialDepartment }
       toast.error("Department ID is missing");
       return;
     }
-    await createMemberMutation.mutateAsync({
+
+    console.log("Creating member with data:", data);
+
+    try {
+      const result = await createMemberMutation.mutateAsync({
+        ...data,
+        departmentId: department.id,
+      });
+
+      console.log("Member creation result:", result);
+
+      // Additional warnings for failed syncs with proper type checking
+      if (hasSyncResults(result)) {
+        const syncResults = result.syncResults;
+        const rankSync = syncResults?.rankSync;
+        const teamSync = syncResults?.teamSync;
+        
+        console.log("Sync results:", { rankSync, teamSync });
+        
+        if (data.rankId && rankSync && typeof rankSync === 'object' && 'success' in rankSync && 'updatedDepartments' in rankSync) {
+          const typedRankSync = rankSync as SyncResultItem;
+          if (!typedRankSync.success || !typedRankSync.updatedDepartments?.length) {
+            toast.warning("Member created but rank sync may have failed. Please verify Discord roles.");
+          }
+        }
+        
+        if (data.primaryTeamId && teamSync && typeof teamSync === 'object' && 'success' in teamSync && 'updatedDepartments' in teamSync) {
+          const typedTeamSync = teamSync as SyncResultItem;
+          if (!typedTeamSync.success || !typedTeamSync.updatedDepartments?.length) {
+            toast.warning("Member created but team sync may have failed. Please verify Discord roles.");
+          }
+        }
+      }
+    } catch (error) {
+      // Error is already handled by the mutation's onError
+      console.error("Error in handleCreateMember:", error);
+    }
+  };
+
+  const handleUpdateMember = async (data: CreateMemberFormData) => {
+    if (!selectedMember?.id) {
+      toast.error("Member ID is missing");
+      return;
+    }
+    await updateMemberMutation.mutateAsync({
+      id: selectedMember.id,
       ...data,
-      departmentId: department.id,
     });
+  };
+
+  const handleDeleteMember = async (memberId: number, memberDiscordId: string) => {
+    if (confirm(`Are you sure you want to delete the member "${memberDiscordId}"? This action cannot be undone.`)) {
+      await deleteMemberMutation.mutateAsync({ id: memberId });
+    }
+  };
+
+  const handleReactivateMember = async (memberId: number, memberDiscordId: string) => {
+    if (confirm(`Reactivate member "${memberDiscordId}"? This will restore their access to the department.`)) {
+      await reactivateMemberMutation.mutateAsync({ 
+        id: memberId, 
+        isActive: true 
+      });
+    }
+  };
+
+  const handleHardDeleteMember = async (memberId: number, memberDiscordId: string) => {
+    if (confirm(`⚠️ PERMANENTLY DELETE member "${memberDiscordId}"?\n\nThis action CANNOT be undone and will:\n- Remove all member data from the database\n- Free up their ID number for reuse\n- Remove them from all teams\n\nAre you absolutely sure?`)) {
+      await hardDeleteMemberMutation.mutateAsync({ id: memberId });
+    }
   };
 
   const handleUpdateDepartment = async (data: UpdateDepartmentFormData) => {
@@ -676,6 +907,20 @@ export default function DepartmentDetailClient({ department: initialDepartment }
   const handleOpenAddMemberDialog = () => {
     addMemberForm.reset();
     setIsAddMemberDialogOpen(true);
+  };
+
+  const handleOpenEditMemberDialog = (member: NonNullable<DepartmentWithRelations['members']>[0]) => {
+    setSelectedMember(member);
+    editMemberForm.reset({
+      discordId: member.discordId,
+      roleplayName: member.roleplayName ?? "",
+      rankId: undefined, // We'll need to determine this from the rank name if needed
+      badgeNumber: member.badgeNumber ?? "",
+      primaryTeamId: member.primaryTeamId ?? undefined,
+      status: (member.status) ?? "pending",
+      notes: "", // This field is not returned in the query but can be edited
+    });
+    setIsEditMemberDialogOpen(true);
   };
 
   const handleOpenEditDepartmentDialog = () => {
@@ -1004,9 +1249,9 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                       </TableRow>
                     ) : (
                       department.teams.map((team) => {
-                        // Count team members
-                        const teamMemberCount = department.members?.filter(
-                          member => member.primaryTeamId === team.id
+                        // Count team members using team memberships data
+                        const teamMemberCount = department.teamMemberships?.filter(
+                          membership => membership.teamId === team.id
                         ).length ?? 0;
 
                         return (
@@ -1153,9 +1398,14 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                           : null;
 
                         return (
-                          <TableRow key={member.id}>
+                          <TableRow key={member.id} className={!member.isActive ? "opacity-60 bg-muted/20" : ""}>
                             <TableCell>
-                              <code className="text-sm">{member.discordId}</code>
+                              <div className="flex items-center gap-2">
+                                <code className="text-sm">{member.discordId}</code>
+                                {!member.isActive && (
+                                  <Badge variant="secondary" className="text-xs">Inactive</Badge>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell>
                               {member.callsign ? (
@@ -1173,14 +1423,16 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                               {primaryTeam ? (
                                 <div className="flex items-center gap-2">
                                   <Badge variant="outline">{primaryTeam.name}</Badge>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleRemoveFromTeam(member.id, primaryTeam.id, primaryTeam.name)}
-                                    title="Remove from primary team"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </Button>
+                                  {member.isActive && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleRemoveFromTeam(member.id, primaryTeam.id, primaryTeam.name)}
+                                      title="Remove from primary team"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  )}
                                 </div>
                               ) : (
                                 <span className="text-muted-foreground">No team</span>
@@ -1196,12 +1448,30 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
-                                <Button variant="outline" size="sm">
-                                  <Edit className="h-3 w-3" />
-                                </Button>
-                                <Button variant="outline" size="sm">
-                                  <Trash2 className="h-3 w-3" />
-                                </Button>
+                                {member.isActive ? (
+                                  <>
+                                    <Button variant="outline" size="sm" onClick={() => handleOpenEditMemberDialog(member)}>
+                                      <Edit className="h-3 w-3" />
+                                    </Button>
+                                    <Button variant="outline" size="sm" onClick={() => handleDeleteMember(member.id, member.discordId)}>
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Button variant="outline" size="sm" onClick={() => handleReactivateMember(member.id, member.discordId)} title="Reactivate member">
+                                      <UserPlus className="h-3 w-3" />
+                                    </Button>
+                                    <Button 
+                                      variant="destructive" 
+                                      size="sm" 
+                                      onClick={() => handleHardDeleteMember(member.id, member.discordId)}
+                                      title="Permanently delete member"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -1387,7 +1657,7 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                   <p className="text-sm text-red-500">{editDepartmentForm.formState.errors.name.message}</p>
                 )}
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="dept-type">Department Type</Label>
                 <Select
@@ -1497,14 +1767,14 @@ export default function DepartmentDetailClient({ department: initialDepartment }
 
       {/* Add Rank Dialog */}
       <Dialog open={isAddRankDialogOpen} onOpenChange={setIsAddRankDialogOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-hidden">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-[700px] h-[90vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle>Add New Rank</DialogTitle>
             <DialogDescription>Create a new rank for this department</DialogDescription>
           </DialogHeader>
           
-          <div className="overflow-y-auto max-h-[calc(90vh-8rem)] pr-2">
-            <form onSubmit={addRankForm.handleSubmit((data: CreateRankFormData) => handleCreateRank(data))} className="space-y-4">
+          <form onSubmit={addRankForm.handleSubmit((data: CreateRankFormData) => handleCreateRank(data))} className="flex flex-col flex-1 min-h-0">
+            <div className="flex-1 overflow-y-auto pr-2 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="rank-name">Rank Name</Label>
@@ -1777,45 +2047,44 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                   </div>
                 </div>
               </div>
-            </form>
-          </div>
+            </div>
 
-          <DialogFooter className="border-t pt-4 mt-4">
-            <Button 
-              type="button"
-              variant="outline" 
-              onClick={() => setIsAddRankDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button 
-              type="submit"
-              disabled={createRankMutation.isPending}
-              onClick={addRankForm.handleSubmit((data: CreateRankFormData) => handleCreateRank(data))}
-            >
-              {createRankMutation.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                'Create Rank'
-              )}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="flex-shrink-0 border-t pt-4 mt-4">
+              <Button 
+                type="button"
+                variant="outline" 
+                onClick={() => setIsAddRankDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                type="submit"
+                disabled={createRankMutation.isPending}
+              >
+                {createRankMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  'Create Rank'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
       {/* Edit Rank Dialog */}
       <Dialog open={isEditRankDialogOpen} onOpenChange={setIsEditRankDialogOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-hidden">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-[700px] h-[90vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle>Edit Rank</DialogTitle>
             <DialogDescription>Update rank details and permissions</DialogDescription>
           </DialogHeader>
           
-          <div className="overflow-y-auto max-h-[calc(90vh-8rem)] pr-2">
-            <form onSubmit={editRankForm.handleSubmit(handleUpdateRank)} className="space-y-4">
+          <form onSubmit={editRankForm.handleSubmit(handleUpdateRank)} className="flex flex-col flex-1 min-h-0">
+            <div className="flex-1 overflow-y-auto pr-2 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="rank-name">Rank Name</Label>
@@ -2088,32 +2357,31 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                   </div>
                 </div>
               </div>
-            </form>
-          </div>
+            </div>
 
-          <DialogFooter className="border-t pt-4 mt-4">
-            <Button 
-              type="button"
-              variant="outline" 
-              onClick={() => setIsEditRankDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button 
-              type="submit"
-              disabled={updateRankMutation.isPending}
-              onClick={editRankForm.handleSubmit(handleUpdateRank)}
-            >
-              {updateRankMutation.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Updating...
-                </>
-              ) : (
-                'Update Rank'
-              )}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="flex-shrink-0 border-t pt-4 mt-4">
+              <Button 
+                type="button"
+                variant="outline" 
+                onClick={() => setIsEditRankDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                type="submit"
+                disabled={updateRankMutation.isPending}
+              >
+                {updateRankMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  'Update Rank'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -2325,6 +2593,15 @@ export default function DepartmentDetailClient({ department: initialDepartment }
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
+                <Label htmlFor="member-roleplay-name">Roleplay Name</Label>
+                <Input
+                  id="member-roleplay-name"
+                  {...addMemberForm.register("roleplayName")}
+                  placeholder="Enter member's roleplay name (optional)"
+                />
+              </div>
+              
+              <div className="space-y-2">
                 <Label htmlFor="member-rank">Rank</Label>
                 <Select
                   value={addMemberForm.watch("rankId")?.toString() ?? "none"}
@@ -2342,6 +2619,17 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="member-badge">Badge Number</Label>
+                <Input
+                  id="member-badge"
+                  {...addMemberForm.register("badgeNumber")}
+                  placeholder="Enter badge number (optional)"
+                />
               </div>
               
               <div className="space-y-2">
@@ -2366,15 +2654,6 @@ export default function DepartmentDetailClient({ department: initialDepartment }
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="member-badge">Badge Number</Label>
-                <Input
-                  id="member-badge"
-                  {...addMemberForm.register("badgeNumber")}
-                  placeholder="Enter badge number (optional)"
-                />
-              </div>
-              
               <div className="space-y-2">
                 <Label htmlFor="member-status">Status</Label>
                 <Select
@@ -2427,6 +2706,153 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                   </>
                 ) : (
                   'Add Member'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Member Dialog */}
+      <Dialog open={isEditMemberDialogOpen} onOpenChange={() => {
+        setIsEditMemberDialogOpen(false);
+        setSelectedMember(null);
+        editMemberForm.reset();
+      }}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Edit Member</DialogTitle>
+            <DialogDescription>Update member details and assignments</DialogDescription>
+          </DialogHeader>
+          
+          <form onSubmit={editMemberForm.handleSubmit(handleUpdateMember)} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-member-discord-id">Discord ID</Label>
+              <Input
+                id="edit-member-discord-id"
+                {...editMemberForm.register("discordId")}
+                placeholder="Enter member's Discord ID"
+                disabled
+              />
+              {editMemberForm.formState.errors.discordId && (
+                <p className="text-sm text-red-500">{editMemberForm.formState.errors.discordId.message}</p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-member-roleplay-name">Roleplay Name</Label>
+                <Input
+                  id="edit-member-roleplay-name"
+                  {...editMemberForm.register("roleplayName")}
+                  placeholder="Enter member's roleplay name (optional)"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-member-rank">Rank</Label>
+                <Select
+                  value={editMemberForm.watch("rankId")?.toString() ?? "none"}
+                  onValueChange={(value) => editMemberForm.setValue("rankId", value === "none" ? undefined : parseInt(value))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select rank (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No rank</SelectItem>
+                    {department.ranks?.filter(r => r.isActive).map((rank) => (
+                      <SelectItem key={rank.id} value={rank.id.toString()}>
+                        {rank.name} ({rank.callsign})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-member-team">Primary Team</Label>
+                <Select
+                  value={editMemberForm.watch("primaryTeamId")?.toString() ?? "none"}
+                  onValueChange={(value) => editMemberForm.setValue("primaryTeamId", value === "none" ? undefined : parseInt(value))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select team (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No team</SelectItem>
+                    {department.teams?.filter(t => t.isActive).map((team) => (
+                      <SelectItem key={team.id} value={team.id.toString()}>
+                        {team.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-member-badge">Badge Number</Label>
+                <Input
+                  id="edit-member-badge"
+                  {...editMemberForm.register("badgeNumber")}
+                  placeholder="Enter badge number (optional)"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-member-status">Status</Label>
+              <Select
+                value={editMemberForm.watch("status") ?? "pending"}
+                onValueChange={(value) => editMemberForm.setValue("status", value as "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted")}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(MEMBER_STATUS_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-member-notes">Notes</Label>
+              <Textarea
+                id="edit-member-notes"
+                {...editMemberForm.register("notes")}
+                placeholder="Enter any notes about this member (optional)"
+                rows={3}
+              />
+            </div>
+
+            <DialogFooter>
+              <Button 
+                type="button"
+                variant="outline" 
+                onClick={() => {
+                  setIsEditMemberDialogOpen(false);
+                  setSelectedMember(null);
+                  editMemberForm.reset();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button 
+                type="submit"
+                disabled={updateMemberMutation.isPending}
+              >
+                {updateMemberMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  'Update Member'
                 )}
               </Button>
             </DialogFooter>

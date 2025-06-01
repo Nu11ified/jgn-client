@@ -259,7 +259,7 @@ export default function UserDepartmentsPage() {
                       
                       {membership.isActive && membership.status === 'active' && (
                         <Link 
-                          href={`/dashboard/departments/${membership.departmentId}/time-tracking`}
+                          href={`/dashboard/departments/time-tracking`}
                         >
                           <Button variant="outline" size="sm">
                             <Clock className="h-4 w-4" />

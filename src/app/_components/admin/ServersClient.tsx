@@ -123,7 +123,7 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
     filteredData: filteredServers, 
   } = useTableControls<Server>({
     data: allFetchedServers, 
-    searchKeys: ['server_name', 'server_id'],
+    searchKeys: ['name', 'id'],
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -257,7 +257,7 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
 
                   return (
                     <TableRow 
-                      key={server.server_id + "-" + virtualItem.index} // server_id should be unique
+                      key={server.id + "-" + virtualItem.index} // id should be unique
                       style={{
                         position: 'absolute',
                         top: `${virtualItem.start}px`,
@@ -268,8 +268,8 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
                       }}
                       data-index={virtualItem.index}
                     >
-                      <TableCell style={{ width: '60%' }} className="font-medium truncate">{server.server_name}</TableCell>
-                      <TableCell style={{ width: '40%' }} className="truncate">{server.server_id}</TableCell>
+                      <TableCell style={{ width: '60%' }} className="font-medium truncate">{server.name}</TableCell>
+                      <TableCell style={{ width: '40%' }} className="truncate">{server.id}</TableCell>
                     </TableRow>
                   );
                 })}

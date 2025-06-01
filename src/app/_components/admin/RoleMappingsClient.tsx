@@ -55,7 +55,7 @@ interface RoleMappingsClientProps {
 
 const roleMappingSchema = z.object({
   discord_role_id: z.string().min(1, "Discord Role is required."),
-  teamspeak_sgid: z.string().min(1, "TeamSpeak Group is required."),
+  teamspeak_group_id: z.string().min(1, "TeamSpeak Group is required."),
 });
 
 type RoleMappingFormValues = z.infer<typeof roleMappingSchema>;
@@ -100,8 +100,8 @@ export default function RoleMappingsClient({
     const search = discordRoleSearch.trim().toLowerCase();
     if (!search || !discordRoles) return discordRoles ?? [];
     return discordRoles.filter(role =>
-      role.role_name.toLowerCase().includes(search) ||
-      role.role_id.toLowerCase().includes(search)
+      role.name.toLowerCase().includes(search) ||
+      role.id.toLowerCase().includes(search)
     );
   }, [discordRoles, discordRoleSearch]);
 
@@ -115,11 +115,11 @@ export default function RoleMappingsClient({
     if (!discordRoles) return [];
     const seenIds = new Set<string>();
     return discordRoles.filter(role => {
-      if (role?.role_id == null) return false;
-      if (seenIds.has(role.role_id)) {
+      if (role?.id == null) return false;
+      if (seenIds.has(role.id)) {
         return false;
       }
-      seenIds.add(role.role_id);
+      seenIds.add(role.id);
       return true;
     });
   }, [discordRoles]);
@@ -128,25 +128,25 @@ export default function RoleMappingsClient({
     if (!tsGroups) return [];
     const seenIds = new Set<number>();
     return tsGroups.filter((group: TsGroup) => {
-      if (group?.sgid == null) return false;
-      if (seenIds.has(group.sgid)) {
+      if (group?.group_id == null) return false;
+      if (seenIds.has(group.group_id)) {
         return false;
       }
-      seenIds.add(group.sgid);
+      seenIds.add(group.group_id);
       return true;
     });
   }, [tsGroups]);
 
   const discordRolesMap = useMemo(() => 
     discordRoles?.reduce((acc: Record<string, string>, role: DiscordRole) => {
-      if (role?.role_id && role.role_name) acc[role.role_id] = role.role_name;
+      if (role?.id && role.name) acc[role.id] = role.name;
       return acc;
     }, {} as Record<string, string>) ?? {}
   , [discordRoles]);
 
   const tsGroupsMap = useMemo(() =>
     tsGroups?.reduce((acc: Record<number, string>, group: TsGroup) => {
-      if (group?.sgid && group.name) acc[group.sgid] = group.name;
+      if (group?.group_id && group.name) acc[group.group_id] = group.name;
       return acc;
     }, {} as Record<number, string>) ?? {}
   , [tsGroups]);
@@ -192,7 +192,7 @@ export default function RoleMappingsClient({
     resolver: zodResolver(roleMappingSchema),
     defaultValues: {
       discord_role_id: '',
-      teamspeak_sgid: '',
+      teamspeak_group_id: '',
     }
   });
 
@@ -200,10 +200,10 @@ export default function RoleMappingsClient({
     if (mapping) {
       setEditingMapping(mapping);
       setValue("discord_role_id", String(mapping.discord_role_id));
-      setValue("teamspeak_sgid", String(mapping.teamspeak_sgid));
+      setValue("teamspeak_group_id", String(mapping.teamspeak_group_id));
     } else {
       setEditingMapping(null);
-      reset({ discord_role_id: '', teamspeak_sgid: '' });
+      reset({ discord_role_id: '', teamspeak_group_id: '' });
     }
     setIsDialogOpen(true);
   };
@@ -211,12 +211,12 @@ export default function RoleMappingsClient({
   const onSubmit = (data: RoleMappingFormValues) => {
     const apiPayload = {
       discord_role_id: data.discord_role_id,
-      teamspeak_sgid: Number(data.teamspeak_sgid),
+      teamspeak_sgid: Number(data.teamspeak_group_id),
     };
     if (editingMapping) {
       updateMutation.mutate({
         discord_role_id: editingMapping.discord_role_id, 
-        teamspeak_sgid: apiPayload.teamspeak_sgid, 
+        teamspeak_sgid: Number(data.teamspeak_group_id), 
       });
     } else {
       createMutation.mutate(apiPayload);
@@ -262,7 +262,7 @@ export default function RoleMappingsClient({
           <Dialog open={isDialogOpen} onOpenChange={(open) => { 
             if (!open) {
                 setEditingMapping(null);
-                reset({ discord_role_id: '', teamspeak_sgid: '' });
+                reset({ discord_role_id: '', teamspeak_group_id: '' });
             }
             setIsDialogOpen(open); 
           }}>
@@ -307,8 +307,8 @@ export default function RoleMappingsClient({
                             <div className="px-4 py-2 text-muted-foreground">No roles found.</div>
                           )}
                           {filteredDiscordRoles.map((role: DiscordRole) => (
-                            <SelectItem key={role.role_id} value={role.role_id}>
-                              {role.role_name} (ID: {role.role_id})
+                            <SelectItem key={role.id} value={role.id}>
+                              {role.name} (ID: {role.id})
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -318,30 +318,30 @@ export default function RoleMappingsClient({
                   {errors.discord_role_id && <p className="text-sm text-destructive mt-1">{errors.discord_role_id.message}</p>}
                 </div>
                 <div>
-                  <label htmlFor="teamspeak_sgid" className="block text-sm font-medium mb-1">TeamSpeak Group</label>
+                  <label htmlFor="teamspeak_group_id" className="block text-sm font-medium mb-1">TeamSpeak Group</label>
                   <Controller
-                    name="teamspeak_sgid"
+                    name="teamspeak_group_id"
                     control={control}
                     render={({ field }) => (
                       <Select onValueChange={field.onChange} value={field.value} >
-                        <SelectTrigger id="teamspeak_sgid" className={errors.teamspeak_sgid ? "border-destructive" : ""}>
+                        <SelectTrigger id="teamspeak_group_id" className={errors.teamspeak_group_id ? "border-destructive" : ""}>
                           <SelectValue placeholder="Select a TeamSpeak Group" />
                         </SelectTrigger>
                         <SelectContent>
                           {uniqueTsGroups?.map((group: TsGroup) => (
-                            <SelectItem key={group.sgid} value={String(group.sgid)}>
-                              {group.name} (SGID: {group.sgid})
+                            <SelectItem key={group.group_id} value={String(group.group_id)}>
+                              {group.name} (SGID: {group.group_id})
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     )}
                   />
-                  {errors.teamspeak_sgid && <p className="text-sm text-destructive mt-1">{errors.teamspeak_sgid.message}</p>}
+                  {errors.teamspeak_group_id && <p className="text-sm text-destructive mt-1">{errors.teamspeak_group_id.message}</p>}
                 </div>
                 <DialogFooter>
                   <DialogClose asChild>
-                    <Button type="button" variant="outline" onClick={() => { setEditingMapping(null); reset({ discord_role_id: '', teamspeak_sgid: '' }); }}>Cancel</Button>
+                    <Button type="button" variant="outline" onClick={() => { setEditingMapping(null); reset({ discord_role_id: '', teamspeak_group_id: '' }); }}>Cancel</Button>
                   </DialogClose>
                   <Button type="submit" disabled={isSubmitting || createMutation.isPending || updateMutation.isPending}>
                     {(isSubmitting || createMutation.isPending || updateMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -366,7 +366,7 @@ export default function RoleMappingsClient({
                 {roleMappings.map((mapping) => (
                   mapping && <TableRow key={mapping.discord_role_id}>
                     <TableCell>{discordRolesMap[mapping.discord_role_id] ?? mapping.discord_role_id}</TableCell>
-                    <TableCell>{tsGroupsMap[mapping.teamspeak_sgid] ?? mapping.teamspeak_sgid}</TableCell>
+                    <TableCell>{tsGroupsMap[mapping.teamspeak_group_id] ?? mapping.teamspeak_group_id}</TableCell>
                     <TableCell className="text-right space-x-2">
                       <Button variant="outline" size="icon" onClick={() => handleDialogOpen(mapping)} disabled={deleteMutation.isPending || updateMutation.isPending || createMutation.isPending}>
                         <Edit className="h-4 w-4" />

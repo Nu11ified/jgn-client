@@ -34,9 +34,35 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-// Infer element type from procedure output
-type UsersOutput = RouterOutputs["admin"]["users"]["listUsers"];
-type User = UsersOutput extends (infer T)[] | undefined ? T : never;
+// Define the correct User type based on the actual API response
+interface AdminUser {
+  id: string;
+  username: string;
+  discriminator: string;
+  avatar: string | null;
+  bot?: boolean;
+  system?: boolean;
+  mfa_enabled?: boolean;
+  banner?: string | null;
+  accent_color?: number | null;
+  locale?: string;
+  verified?: boolean;
+  email?: string | null;
+  flags?: number;
+  premium_type?: number;
+  public_flags?: number;
+  avatar_decoration?: string | null;
+  ts_uid?: string | null;
+  // Admin-specific properties
+  is_admin: boolean;
+  is_moderator: boolean;
+  discord_id: string;
+  api_key: string;
+  last_synced: string;
+}
+
+// Use AdminUser as our User type
+type User = AdminUser;
 
 // Add these types at the top with other types
 type RoleFilter = 'all' | 'admin' | 'moderator' | 'user';
@@ -69,7 +95,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
     filteredData: initialFilteredUsers,
   } = useTableControls<User>({
     data: allFetchedUsers,
-    searchKeys: ['username', 'discord_id', 'ts_uid'],
+    searchKeys: ['username', 'id', 'ts_uid'],
   });
 
   // Add additional filtering
@@ -191,7 +217,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
           if (!active) break;
 
           if (nextPageUsers && nextPageUsers.length > 0) {
-            const validNextPageUsers = nextPageUsers.filter(Boolean);
+            const validNextPageUsers = (nextPageUsers as User[]).filter(Boolean);
             accumulatedUsersInternal = [...accumulatedUsersInternal, ...validNextPageUsers];
             setAllFetchedUsers(prev => [...prev.filter(Boolean), ...validNextPageUsers]); 
             currentPosition += validNextPageUsers.length;

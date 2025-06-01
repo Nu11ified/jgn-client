@@ -546,7 +546,7 @@ export const formRouter = createTRPCRouter({
         .from(formResponses)
         .where(and(
           eq(formResponses.formId, input.formId),
-          eq(formResponses.userId, ctx.session.user.id),
+          eq(formResponses.userId, String(ctx.dbUser.discordId)),
           eq(formResponses.status, formResponseStatusEnum.enum.draft)
         ))
         .limit(1).execute();
@@ -571,7 +571,7 @@ export const formRouter = createTRPCRouter({
         // Create a new response
         const [newResponse] = await postgrestDb
           .insert(formResponses)
-          .values({ formId: input.formId, userId: ctx.session.user.id, answers: input.answers, status: initialStatus, submittedAt: new Date() })
+          .values({ formId: input.formId, userId: String(ctx.dbUser.discordId), answers: input.answers, status: initialStatus, submittedAt: new Date() })
           .returning().execute();
         if (!newResponse) {
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to submit form response." });
@@ -629,7 +629,7 @@ export const formRouter = createTRPCRouter({
       }
       
       const existingReview = responseToReview.reviewerDecisions?.find(
-        (d: ReviewerDecisionObject) => d.userId === ctx.session.user.id
+        (d: ReviewerDecisionObject) => d.userId === String(ctx.dbUser.discordId)
       );
       if (existingReview) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "You have already reviewed this response." });
@@ -637,7 +637,7 @@ export const formRouter = createTRPCRouter({
 
       const newDecision: ReviewerDecisionObject = {
         reviewerName: ctx.session.user.name,
-        userId: ctx.session.user.id,
+        userId: String(ctx.dbUser.discordId),
         decision: input.decision,
         reviewedAt: new Date(),
         comments: input.comments,
@@ -646,7 +646,7 @@ export const formRouter = createTRPCRouter({
       const updatedDecisions = [...(responseToReview.reviewerDecisions ?? []), newDecision];
       
       // Add the current reviewer's ID to the reviewerIds array if not already present
-      const currentReviewerId = ctx.session.user.id;
+      const currentReviewerId = String(ctx.dbUser.discordId);
       const updatedReviewerIds = Array.from(new Set([...(responseToReview.reviewerIds ?? []), currentReviewerId]));
 
       let newApprovedCount = responseToReview.reviewersApprovedCount;
@@ -746,7 +746,7 @@ export const formRouter = createTRPCRouter({
 
       const result = await postgrestDb
         .update(formResponses)
-        .set({ finalApproverId: ctx.session.user.id, finalApprovalDecision: input.decision, finalApprovedAt: new Date(), finalApprovalComments: input.comments, status: newStatus, updatedAt: new Date() })
+        .set({ finalApproverId: String(ctx.dbUser.discordId), finalApprovalDecision: input.decision, finalApprovedAt: new Date(), finalApprovalComments: input.comments, status: newStatus, updatedAt: new Date() })
         .where(eq(formResponses.id, input.responseId))
         .returning().execute();
       const updatedResponse = result[0];
@@ -984,7 +984,7 @@ export const formRouter = createTRPCRouter({
       }
 
       let canView = false;
-      if (response.userId === ctx.session.user.id) {
+      if (response.userId === String(ctx.dbUser.discordId)) {
         canView = true;
       } else {
         if (!ctx.dbUser?.discordId) {
@@ -1095,7 +1095,7 @@ export const formRouter = createTRPCRouter({
       cursor: z.string().optional(), // submittedAt timestamp
     }))
     .query(async ({ ctx, input }) => {
-      const userId = ctx.session.user.id;
+      const userId = String(ctx.dbUser.discordId);
       const whereClauses = [eq(formResponses.userId, userId)];
 
       if (input.cursor) {
@@ -1153,7 +1153,7 @@ export const formRouter = createTRPCRouter({
         drizzleSql`NOT (EXISTS (
           SELECT 1
           FROM jsonb_array_elements(${formResponses.reviewerDecisions}) AS decision
-          WHERE (decision->>'userId')::text = ${ctx.session.user.id}
+          WHERE (decision->>'userId')::text = ${String(ctx.dbUser.discordId)}
         ))`
       ];
 
@@ -1270,7 +1270,7 @@ export const formRouter = createTRPCRouter({
       responseId: z.number().int().optional(), // If updating an existing draft
     }))
     .mutation(async ({ ctx, input }): Promise<PgFormResponse> => {
-      const userId = ctx.session.user.id;
+      const userId = String(ctx.dbUser.discordId);
 
       // Check if form exists and is not deleted
       const [targetForm] = await postgrestDb.select({ id: forms.id, accessRoleIds: forms.accessRoleIds })
@@ -1343,7 +1343,7 @@ export const formRouter = createTRPCRouter({
   getUserDraft: protectedProcedure
     .input(z.object({ formId: z.number().int() }))
     .query(async ({ ctx, input }) => {
-      const userId = ctx.session.user.id;
+      const userId = String(ctx.dbUser.discordId);
       // Use findFirst with correct type from relations if possible, or select specific fields
       const draft = await postgrestDb.query.formResponses.findFirst({
         where: and(

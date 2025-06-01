@@ -18,7 +18,9 @@ import {
   TrendingUp,
   Eye,
   Edit,
-  User
+  User,
+  Users,
+  UserCog
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,6 +28,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 // Define types that match the actual API responses
@@ -64,7 +67,10 @@ export default function DepartmentDetailPage() {
   const params = useParams();
   const departmentId = Number(params.departmentId);
   const [isRoleplayNameDialogOpen, setIsRoleplayNameDialogOpen] = useState(false);
+  const [isJoinDialogOpen, setIsJoinDialogOpen] = useState(false);
   const [roleplayName, setRoleplayName] = useState("");
+  const [joinRoleplayName, setJoinRoleplayName] = useState("");
+  const [joinNotes, setJoinNotes] = useState("");
 
   // Get department information from discovery router
   const { data: departmentInfo, isLoading: deptLoading, error: deptError } = api.dept.discovery.getDepartmentInfo.useQuery(
@@ -75,6 +81,33 @@ export default function DepartmentDetailPage() {
   // Get user's own membership
   const { data: memberships } = api.dept.discovery.getMyMemberships.useQuery();
   const userMembership = memberships?.find(m => m.departmentId === departmentId);
+
+  // Check permissions for navigation
+  const { data: canViewRoster } = api.dept.user.checkPermission.useQuery({ 
+    departmentId,
+    permission: 'view_all_members'
+  }, { enabled: !!userMembership?.isActive });
+
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ 
+    departmentId,
+    permission: 'manage_members'
+  }, { enabled: !!userMembership?.isActive });
+
+  // Join department mutation
+  const joinDepartmentMutation = api.dept.discovery.joinDepartment.useMutation({
+    onSuccess: () => {
+      toast.success("Successfully joined department! You are now in training status.");
+      setIsJoinDialogOpen(false);
+      setJoinRoleplayName("");
+      setJoinNotes("");
+      // Refresh data
+      void api.useUtils().dept.discovery.getMyMemberships.invalidate();
+      void api.useUtils().dept.discovery.getDepartmentInfo.invalidate();
+    },
+    onError: (error) => {
+      toast.error(error.message ?? "Failed to join department");
+    },
+  });
 
   // Update roleplay name mutation
   const updateRoleplayNameMutation = api.dept.user.info.updateMyRoleplayName.useMutation({
@@ -89,6 +122,14 @@ export default function DepartmentDetailPage() {
       toast.error(error.message ?? "Failed to update roleplay name");
     },
   });
+
+  const handleJoinDepartment = () => {
+    joinDepartmentMutation.mutate({
+      departmentId,
+      roleplayName: joinRoleplayName.trim() || undefined,
+      notes: joinNotes.trim() || undefined,
+    });
+  };
 
   const handleUpdateRoleplayName = () => {
     if (!roleplayName.trim()) {
@@ -508,14 +549,113 @@ export default function DepartmentDetailPage() {
                         Performance
                       </Button>
                     </Link>
+                    
+                    {/* Department Navigation */}
+                    {canViewRoster?.hasPermission && (
+                      <Link href={`/dashboard/departments/${departmentId}/roster`}>
+                        <Button variant="outline" size="sm" className="w-full justify-start">
+                          <Users className="h-4 w-4 mr-2" />
+                          Department Roster
+                        </Button>
+                      </Link>
+                    )}
+                    
+                    {canManageMembers?.hasPermission && (
+                      <Link href={`/dashboard/departments/${departmentId}/management`}>
+                        <Button variant="outline" size="sm" className="w-full justify-start">
+                          <UserCog className="h-4 w-4 mr-2" />
+                          Training Management
+                        </Button>
+                      </Link>
+                    )}
+                  </>
+                ) : userMembership?.isActive ? (
+                  <>
+                    {/* Show navigation options for active users with limited other actions */}
+                    {canViewRoster?.hasPermission && (
+                      <Link href={`/dashboard/departments/${departmentId}/roster`}>
+                        <Button variant="outline" size="sm" className="w-full justify-start">
+                          <Users className="h-4 w-4 mr-2" />
+                          Department Roster
+                        </Button>
+                      </Link>
+                    )}
+                    
+                    {canManageMembers?.hasPermission && (
+                      <Link href={`/dashboard/departments/${departmentId}/management`}>
+                        <Button variant="outline" size="sm" className="w-full justify-start">
+                          <UserCog className="h-4 w-4 mr-2" />
+                          Training Management
+                        </Button>
+                      </Link>
+                    )}
+                    
+                    {!canViewRoster?.hasPermission && !canManageMembers?.hasPermission && (
+                      <div className="text-center py-4 text-muted-foreground">
+                        <p className="text-sm">
+                          Contact department leadership for more options
+                        </p>
+                      </div>
+                    )}
                   </>
                 ) : !userMembership && !typedDepartmentInfo.existingMembership ? (
-                  <Link href={`/dashboard/departments/browse`}>
-                    <Button className="w-full justify-start">
-                      <Eye className="h-4 w-4 mr-2" />
-                      Join Department
-                    </Button>
-                  </Link>
+                  <Dialog open={isJoinDialogOpen} onOpenChange={setIsJoinDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button className="w-full justify-start">
+                        <User className="h-4 w-4 mr-2" />
+                        Join Department
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-[425px]">
+                      <DialogHeader>
+                        <DialogTitle>Join {typedDepartmentInfo.name}</DialogTitle>
+                        <DialogDescription>
+                          Apply to join this department. You&apos;ll start in training status and need to complete training before becoming active.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div className="grid gap-2">
+                          <Label htmlFor="join-roleplay-name">
+                            Roleplay Character Name (Optional)
+                          </Label>
+                          <Input
+                            id="join-roleplay-name"
+                            value={joinRoleplayName}
+                            onChange={(e) => setJoinRoleplayName(e.target.value)}
+                            placeholder="Enter your character name for this department"
+                            maxLength={100}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="join-notes">
+                            Additional Notes (Optional)
+                          </Label>
+                          <Textarea
+                            id="join-notes"
+                            value={joinNotes}
+                            onChange={(e) => setJoinNotes(e.target.value)}
+                            placeholder="Any additional information or questions"
+                            maxLength={500}
+                            rows={3}
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button 
+                          variant="outline" 
+                          onClick={() => setIsJoinDialogOpen(false)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button 
+                          onClick={handleJoinDepartment}
+                          disabled={joinDepartmentMutation.isPending}
+                        >
+                          {joinDepartmentMutation.isPending ? "Joining..." : "Join Department"}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
                 ) : (
                   <div className="text-center py-4 text-muted-foreground">
                     <p className="text-sm">

@@ -106,7 +106,7 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
     filteredData: filteredRoles, 
   } = useTableControls<Role>({
     data: allFetchedRoles, 
-    searchKeys: ['role_name', 'role_id', 'server_id'],
+    searchKeys: ['name', 'id', 'server_id'],
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -223,12 +223,12 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
                 if (!role) return null;
                 return (
                   <TableRow 
-                    key={role.role_id}
+                    key={role.id}
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                   >
-                    <TableCell>{role.role_name}</TableCell>
-                    <TableCell>{role.role_id}</TableCell>
+                    <TableCell>{role.name}</TableCell>
+                    <TableCell>{role.id}</TableCell>
                     <TableCell>{role.server_id}</TableCell>
                   </TableRow>
                 );

@@ -1164,8 +1164,8 @@ export const formRouter = createTRPCRouter({
         });
         if (cursorItem?.submittedAt) {
           conditions.push(
-            drizzleSql`(${formResponses.submittedAt} < ${cursorItem.submittedAt}) OR 
-                       (${formResponses.submittedAt} = ${cursorItem.submittedAt} AND ${formResponses.id} < ${cursorItem.id})`
+            drizzleSql`(${formResponses.submittedAt} < ${cursorItem.submittedAt.toISOString()}) OR 
+                       (${formResponses.submittedAt} = ${cursorItem.submittedAt.toISOString()} AND ${formResponses.id} < ${cursorItem.id})`
           );
         }
       }
@@ -1231,8 +1231,8 @@ export const formRouter = createTRPCRouter({
         });
         if (cursorItem?.submittedAt) {
            conditions.push(
-            drizzleSql`(${formResponses.submittedAt} < ${cursorItem.submittedAt}) OR 
-                       (${formResponses.submittedAt} = ${cursorItem.submittedAt} AND ${formResponses.id} < ${cursorItem.id})`
+            drizzleSql`(${formResponses.submittedAt} < ${cursorItem.submittedAt.toISOString()}) OR 
+                       (${formResponses.submittedAt} = ${cursorItem.submittedAt.toISOString()} AND ${formResponses.id} < ${cursorItem.id})`
           );
         }
       }

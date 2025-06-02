@@ -114,7 +114,7 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
       active = false;
       console.log("ServersClient: Fetch all effect cleanup");
     };
-  }, [trpcUtils, allFetchedServers.length, isFetchingAll]);
+  }, [trpcUtils, allFetchedServers.length, isFetchingAll, allFetchedServers]);
 
   const {
     searchTerm,

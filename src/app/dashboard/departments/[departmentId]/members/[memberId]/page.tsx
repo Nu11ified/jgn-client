@@ -42,6 +42,14 @@ import {
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { toast } from "sonner";
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogFooter, 
+  DialogHeader, 
+  DialogTitle 
+} from "@/components/ui/dialog";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
 
@@ -79,6 +87,26 @@ export default function MemberDetailsPage() {
     rankId?: number;
     primaryTeamId?: number;
   }>({});
+
+  // Add state for disciplinary actions
+  const [disciplineAction, setDisciplineAction] = useState<{
+    isOpen: boolean;
+    type: 'warn' | 'suspend' | null;
+    reason: string;
+  }>({
+    isOpen: false,
+    type: null,
+    reason: '',
+  });
+
+  // Add state for notes editing
+  const [notesState, setNotesState] = useState<{
+    isEditing: boolean;
+    value: string;
+  }>({
+    isEditing: false,
+    value: '',
+  });
 
   // Get member details using the memberIdFilter
   const { data: rosterData, isLoading: memberLoading, refetch: refetchMember } = api.dept.user.info.getDepartmentRoster.useQuery({
@@ -207,6 +235,44 @@ export default function MemberDetailsPage() {
     },
   });
 
+  // Add disciplinary action mutation
+  const disciplineIssueMutation = api.dept.user.discipline.issue.useMutation({
+    onSuccess: () => {
+      toast.success("Disciplinary action issued successfully");
+      void refetchMember();
+      // Refetch disciplinary actions if they are being displayed
+      if (permissions?.hasPermission ?? false) {
+        // We need to manually trigger a refetch since we're not using a separate refetch function
+        // The disciplinary actions query will automatically refetch when the component re-renders
+      }
+    },
+    onError: (error) => {
+      toast.error(`Failed to issue disciplinary action: ${error.message}`);
+    },
+  });
+
+  // Add dismiss disciplinary action mutation
+  const disciplineDismissMutation = api.dept.user.discipline.dismiss.useMutation({
+    onSuccess: () => {
+      toast.success("Disciplinary action dismissed successfully");
+      void refetchMember();
+    },
+    onError: (error) => {
+      toast.error(`Failed to dismiss disciplinary action: ${error.message}`);
+    },
+  });
+
+  // Add notes update mutation
+  const updateNotesMutation = api.dept.admin.members.update.useMutation({
+    onSuccess: () => {
+      toast.success("Notes updated successfully");
+      void refetchMember();
+    },
+    onError: (error) => {
+      toast.error(`Failed to update notes: ${error.message}`);
+    },
+  });
+
   const handlePromote = (toRankId: number, reason?: string) => {
     if (!memberData) return;
     
@@ -232,16 +298,109 @@ export default function MemberDetailsPage() {
   const handleDiscipline = (action: 'warn' | 'suspend', reason?: string) => {
     if (!memberData) return;
     
-    // For now, let's use the status update to handle warnings and suspensions
+    const actionTypeMap = {
+      'warn': 'warning',
+      'suspend': 'suspension',
+    };
+    
     const statusMap = {
       'warn': 'warned_1' as MemberStatus,
       'suspend': 'suspended' as MemberStatus,
     };
     
+    // Issue disciplinary action first
+    disciplineIssueMutation.mutate({
+      memberId: memberData.id,
+      actionType: actionTypeMap[action],
+      reason: reason ?? `${action === 'warn' ? 'Warning' : 'Suspension'} issued via member management`,
+      description: `${action === 'warn' ? 'Warning' : 'Suspension'} issued by management for: ${reason ?? 'No specific reason provided'}`,
+      expiresAt: action === 'suspend' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : undefined, // 30 days for suspension
+    });
+    
+    // Update member status
     updateMemberMutation.mutate({
       id: memberId,
       status: statusMap[action],
-      notes: `${memberData.notes ? memberData.notes + '\n\n' : ''}${action.toUpperCase()}: ${reason ?? 'No reason provided'} - ${new Date().toISOString()}`,
+    });
+  };
+
+  const handleNotesUpdate = (newNotes: string) => {
+    if (!memberData) return;
+    
+    updateNotesMutation.mutate({
+      id: memberId,
+      notes: newNotes,
+    });
+  };
+
+  // New handlers for disciplinary actions with confirmation
+  const openDisciplineDialog = (type: 'warn' | 'suspend') => {
+    setDisciplineAction({
+      isOpen: true,
+      type,
+      reason: '',
+    });
+  };
+
+  const closeDisciplineDialog = () => {
+    setDisciplineAction({
+      isOpen: false,
+      type: null,
+      reason: '',
+    });
+  };
+
+  const confirmDisciplineAction = () => {
+    if (!disciplineAction.type || !memberData) return;
+    
+    const actionTypeMap = {
+      'warn': 'warning',
+      'suspend': 'suspension',
+    };
+    
+    const statusMap = {
+      'warn': 'warned_1' as MemberStatus,
+      'suspend': 'suspended' as MemberStatus,
+    };
+    
+    // Issue disciplinary action first
+    disciplineIssueMutation.mutate({
+      memberId: memberData.id,
+      actionType: actionTypeMap[disciplineAction.type],
+      reason: disciplineAction.reason || `${disciplineAction.type === 'warn' ? 'Warning' : 'Suspension'} issued via member management`,
+      description: `${disciplineAction.type === 'warn' ? 'Warning' : 'Suspension'} issued by management for: ${disciplineAction.reason || 'No specific reason provided'}`,
+      expiresAt: disciplineAction.type === 'suspend' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : undefined, // 30 days for suspension
+    });
+    
+    // Update member status
+    updateMemberMutation.mutate({
+      id: memberId,
+      status: statusMap[disciplineAction.type],
+    });
+    
+    // Close dialog
+    closeDisciplineDialog();
+  };
+
+  const startEditingNotes = () => {
+    setNotesState({
+      isEditing: true,
+      value: memberData?.notes ?? '',
+    });
+  };
+
+  const cancelEditingNotes = () => {
+    setNotesState({
+      isEditing: false,
+      value: '',
+    });
+  };
+
+  const saveNotes = () => {
+    handleNotesUpdate(notesState.value);
+    setNotesState({
+      isEditing: false,
+      value: '',
     });
   };
 
@@ -929,6 +1088,28 @@ export default function MemberDetailsPage() {
                                       </div>
                                     )}
                                   </div>
+                                  {/* Add dismiss button for active disciplinary actions */}
+                                  {action.isActive && canDiscipline && (
+                                    <div className="flex flex-col gap-1">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="text-red-600 hover:text-red-700 border-red-200 hover:border-red-300"
+                                        onClick={() => {
+                                          if (window.confirm(`Are you sure you want to dismiss this ${action.actionType.toLowerCase()}? This action cannot be undone.`)) {
+                                            disciplineDismissMutation.mutate({
+                                              actionId: action.id,
+                                              reason: "Dismissed via member management"
+                                            });
+                                          }
+                                        }}
+                                        disabled={disciplineDismissMutation.isPending}
+                                      >
+                                        <X className="h-3 w-3 mr-1" />
+                                        {disciplineDismissMutation.isPending ? "Dismissing..." : "Dismiss"}
+                                      </Button>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             ))}
@@ -952,7 +1133,20 @@ export default function MemberDetailsPage() {
               <CardContent className="space-y-4">
                 {/* Notes */}
                 <div>
-                  <label className="text-sm font-medium">Notes</label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium">Notes</label>
+                    {!isEditing && !notesState.isEditing && canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={startEditingNotes}
+                        className="h-8 px-2"
+                      >
+                        <Edit className="h-3 w-3 mr-1" />
+                        Edit
+                      </Button>
+                    )}
+                  </div>
                   {isEditing ? (
                     <Textarea
                       value={editData.notes}
@@ -960,8 +1154,35 @@ export default function MemberDetailsPage() {
                       placeholder="Add notes about this member..."
                       rows={4}
                     />
+                  ) : notesState.isEditing ? (
+                    <div className="space-y-2">
+                      <Textarea
+                        value={notesState.value}
+                        onChange={(e) => setNotesState(prev => ({ ...prev, value: e.target.value }))}
+                        placeholder="Add notes about this member..."
+                        rows={4}
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={saveNotes}
+                          disabled={updateNotesMutation.isPending}
+                        >
+                          <Save className="h-3 w-3 mr-1" />
+                          {updateNotesMutation.isPending ? "Saving..." : "Save"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={cancelEditingNotes}
+                        >
+                          <X className="h-3 w-3 mr-1" />
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground min-h-[100px] p-2 border rounded">
+                    <p className="text-sm text-muted-foreground min-h-[100px] p-2 border rounded whitespace-pre-wrap">
                       {memberData.notes ?? 'No notes'}
                     </p>
                   )}
@@ -1069,22 +1290,22 @@ export default function MemberDetailsPage() {
                               variant="outline"
                               size="sm"
                               className="justify-start text-orange-600 hover:text-orange-700"
-                              onClick={() => handleDiscipline('warn', 'Disciplinary action')}
-                              disabled={updateMemberMutation.isPending}
+                              onClick={() => openDisciplineDialog('warn')}
+                              disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
                             >
                               <AlertTriangle className="h-4 w-4 mr-2" />
-                              {updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
+                              {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
                             </Button>
 
                             <Button
                               variant="outline"
                               size="sm"
                               className="justify-start text-red-600 hover:text-red-700"
-                              onClick={() => handleDiscipline('suspend', 'Suspended pending review')}
-                              disabled={updateMemberMutation.isPending}
+                              onClick={() => openDisciplineDialog('suspend')}
+                              disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
                             >
                               <Ban className="h-4 w-4 mr-2" />
-                              {updateMemberMutation.isPending ? "Processing..." : "Suspend"}
+                              {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Suspend"}
                             </Button>
                           </>
                         )}
@@ -1106,6 +1327,52 @@ export default function MemberDetailsPage() {
             </Button>
           </Link>
         </div>
+
+        {/* Discipline Action Dialog */}
+        <Dialog open={disciplineAction.isOpen} onOpenChange={closeDisciplineDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>
+                {disciplineAction.type === 'warn' ? 'Issue Warning' : 'Suspend Member'}
+              </DialogTitle>
+              <DialogDescription>
+                {disciplineAction.type === 'warn' 
+                  ? `Issue a warning to ${memberData?.roleplayName ?? 'this member'}. This action will be recorded in their disciplinary history.`
+                  : `Suspend ${memberData?.roleplayName ?? 'this member'} from active duty. This action will be recorded in their disciplinary history and will expire in 30 days.`
+                }
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium">Reason</label>
+                <Textarea
+                  value={disciplineAction.reason}
+                  onChange={(e) => setDisciplineAction(prev => ({ ...prev, reason: e.target.value }))}
+                  placeholder={`Enter reason for ${disciplineAction.type === 'warn' ? 'warning' : 'suspension'}...`}
+                  rows={3}
+                />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={closeDisciplineDialog}>
+                Cancel
+              </Button>
+              <Button
+                onClick={confirmDisciplineAction}
+                disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                variant={disciplineAction.type === 'warn' ? 'default' : 'destructive'}
+              >
+                {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? (
+                  "Processing..."
+                ) : (
+                  `Issue ${disciplineAction.type === 'warn' ? 'Warning' : 'Suspension'}`
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

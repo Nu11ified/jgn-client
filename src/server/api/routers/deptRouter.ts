@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, desc, asc, isNull, isNotNull, sql, inArray, gt, gte, lt } from "drizzle-orm";
+import { eq, and, desc, asc, isNull, isNotNull, sql, inArray, gt, gte, lt, lte, ne } from "drizzle-orm";
 import { adminProcedure, protectedProcedure, publicProcedure, createTRPCRouter } from "@/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { postgrestDb } from "@/server/postgres";
@@ -4155,6 +4155,22 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
+            // Check if trying to promote themselves
+            if (member.discordId === String(ctx.dbUser.discordId)) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You cannot promote yourself",
+              });
+            }
+
+            // Check if target member has equal or higher rank level than promoter
+            if (member.currentRankLevel && member.currentRankLevel >= promoter[0]!.level!) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You cannot promote someone of equal or higher rank",
+              });
+            }
+
             // Get the target rank info
             const targetRank = await postgrestDb
               .select()
@@ -4171,14 +4187,6 @@ export const deptRouter = createTRPCRouter({
               throw new TRPCError({
                 code: "NOT_FOUND",
                 message: "Target rank not found in this department",
-              });
-            }
-
-            // Check if promoter has sufficient rank level (can't promote above their own level)
-            if (targetRank[0]!.level >= promoter[0]!.level!) {
-              throw new TRPCError({
-                code: "FORBIDDEN",
-                message: "You cannot promote someone to a rank equal to or higher than your own",
               });
             }
 
@@ -4766,6 +4774,148 @@ export const deptRouter = createTRPCRouter({
             });
           }
         }),
+
+      // Dismiss/remove disciplinary action
+      dismiss: protectedProcedure
+        .input(z.object({
+          actionId: z.number().int().positive(),
+          reason: z.string().optional(),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          try {
+            // Get disciplinary action details
+            const action = await postgrestDb
+              .select({
+                id: deptSchema.departmentDisciplinaryActions.id,
+                memberId: deptSchema.departmentDisciplinaryActions.memberId,
+                actionType: deptSchema.departmentDisciplinaryActions.actionType,
+                isActive: deptSchema.departmentDisciplinaryActions.isActive,
+                departmentId: deptSchema.departmentMembers.departmentId,
+                memberDiscordId: deptSchema.departmentMembers.discordId,
+              })
+              .from(deptSchema.departmentDisciplinaryActions)
+              .innerJoin(
+                deptSchema.departmentMembers,
+                eq(deptSchema.departmentDisciplinaryActions.memberId, deptSchema.departmentMembers.id)
+              )
+              .where(eq(deptSchema.departmentDisciplinaryActions.id, input.actionId))
+              .limit(1);
+
+            if (action.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Disciplinary action not found",
+              });
+            }
+
+            const disciplinaryAction = action[0]!;
+
+            if (!disciplinaryAction.isActive) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: "Disciplinary action is already inactive",
+              });
+            }
+
+            // Check permissions - user must have discipline_members permission
+            const requester = await postgrestDb
+              .select({
+                permissions: deptSchema.departmentRanks.permissions,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                  eq(deptSchema.departmentMembers.departmentId, disciplinaryAction.departmentId),
+                  eq(deptSchema.departmentMembers.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (requester.length === 0) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You are not a member of this department",
+              });
+            }
+
+            const permissions = requester[0]!.permissions!;
+            if (!permissions.discipline_members) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You do not have permission to dismiss disciplinary actions",
+              });
+            }
+
+            // Mark the disciplinary action as inactive
+            const result = await postgrestDb
+              .update(deptSchema.departmentDisciplinaryActions)
+              .set({
+                isActive: false,
+                appealNotes: input.reason ? `Dismissed by management: ${input.reason}` : "Dismissed by management",
+                updatedAt: new Date(),
+              })
+              .where(eq(deptSchema.departmentDisciplinaryActions.id, input.actionId))
+              .returning();
+
+            // If it was a warning or suspension, we should also check if member status needs to be updated
+            if (disciplinaryAction.actionType === 'warning' || disciplinaryAction.actionType === 'suspension') {
+              // Check if member has any other active disciplinary actions
+              const otherActiveActions = await postgrestDb
+                .select()
+                .from(deptSchema.departmentDisciplinaryActions)
+                .where(
+                  and(
+                    eq(deptSchema.departmentDisciplinaryActions.memberId, disciplinaryAction.memberId),
+                    eq(deptSchema.departmentDisciplinaryActions.isActive, true),
+                    ne(deptSchema.departmentDisciplinaryActions.id, input.actionId)
+                  )
+                );
+
+              // If no other active actions, potentially reset member status to active
+              if (otherActiveActions.length === 0) {
+                const memberInfo = await postgrestDb
+                  .select({
+                    status: deptSchema.departmentMembers.status,
+                  })
+                  .from(deptSchema.departmentMembers)
+                  .where(eq(deptSchema.departmentMembers.id, disciplinaryAction.memberId))
+                  .limit(1);
+
+                if (memberInfo.length > 0) {
+                  const currentStatus = memberInfo[0]!.status;
+                  
+                  // Only update status if it's currently a disciplinary status
+                  if (currentStatus === 'warned_1' || currentStatus === 'warned_2' || currentStatus === 'warned_3' || currentStatus === 'suspended') {
+                    await postgrestDb
+                      .update(deptSchema.departmentMembers)
+                      .set({
+                        status: 'active',
+                        updatedAt: new Date(),
+                      })
+                      .where(eq(deptSchema.departmentMembers.id, disciplinaryAction.memberId));
+                  }
+                }
+              }
+            }
+
+            return {
+              success: true,
+              message: `Disciplinary action dismissed successfully`,
+              action: result[0],
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to dismiss disciplinary action",
+            });
+          }
+        }),
     }),
 
     // ===== TIME CLOCK MANAGEMENT =====
@@ -4979,6 +5129,15 @@ export const deptRouter = createTRPCRouter({
         }))
         .query(async ({ ctx, input }) => {
           try {
+            console.log('[getHistory] Starting query with input:', {
+              departmentId: input.departmentId,
+              memberId: input.memberId,
+              startDate: input.startDate?.toISOString(),
+              endDate: input.endDate?.toISOString(),
+              limit: input.limit,
+              offset: input.offset
+            });
+
             // Check permissions - either viewing own time or have manage_timeclock permission
             const requester = await postgrestDb
               .select({
@@ -4999,6 +5158,8 @@ export const deptRouter = createTRPCRouter({
               )
               .limit(1);
 
+            console.log('[getHistory] Found requester:', requester.length > 0 ? 'Yes' : 'No');
+
             if (requester.length === 0) {
               throw new TRPCError({
                 code: "FORBIDDEN",
@@ -5008,6 +5169,12 @@ export const deptRouter = createTRPCRouter({
 
             const permissions = requester[0]!.permissions;
             const canViewOthers = (permissions?.view_all_timeclock ?? false) || (permissions?.manage_timeclock ?? false);
+
+            console.log('[getHistory] Permissions check:', {
+              canViewOthers,
+              viewAllTimeclock: permissions?.view_all_timeclock,
+              manageTimeclock: permissions?.manage_timeclock
+            });
 
             // Determine target member
             let targetMemberId = requester[0]!.id;
@@ -5041,16 +5208,20 @@ export const deptRouter = createTRPCRouter({
               targetMemberId = input.memberId;
             }
 
+            console.log('[getHistory] Target member ID:', targetMemberId);
+
             // Build conditions
             const conditions = [eq(deptSchema.departmentTimeClockEntries.memberId, targetMemberId)];
             
             if (input.startDate) {
-              conditions.push(sql`${deptSchema.departmentTimeClockEntries.clockInTime} >= ${input.startDate}`);
+              conditions.push(gte(deptSchema.departmentTimeClockEntries.clockInTime, input.startDate));
             }
             
             if (input.endDate) {
-              conditions.push(sql`${deptSchema.departmentTimeClockEntries.clockInTime} <= ${input.endDate}`);
+              conditions.push(lte(deptSchema.departmentTimeClockEntries.clockInTime, input.endDate)); 
             }
+
+            console.log('[getHistory] Built conditions, starting entries query...');
 
             // Get time entries
             const entries = await postgrestDb
@@ -5069,6 +5240,8 @@ export const deptRouter = createTRPCRouter({
               .limit(input.limit)
               .offset(input.offset);
 
+            console.log('[getHistory] Entries query completed, found:', entries.length, 'entries');
+
             // Get total count
             const totalCountResult = await postgrestDb
               .select({ count: sql`count(*)` })
@@ -5077,16 +5250,34 @@ export const deptRouter = createTRPCRouter({
 
             const totalCount = Number(totalCountResult[0]?.count ?? 0);
 
-            return {
+            console.log('[getHistory] Total count:', totalCount);
+
+            const result = {
               entries,
               totalCount,
               hasMore: input.offset + input.limit < totalCount,
             };
+
+            console.log('[getHistory] Returning result with', result.entries.length, 'entries');
+            return result;
           } catch (error) {
+            console.error('[getHistory] Error occurred:', {
+              error,
+              message: error instanceof Error ? error.message : 'Unknown error',
+              stack: error instanceof Error ? error.stack : undefined,
+              input: {
+                departmentId: input.departmentId,
+                memberId: input.memberId,
+                startDate: input.startDate?.toISOString(),
+                endDate: input.endDate?.toISOString()
+              }
+            });
+
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
               message: "Failed to fetch time history",
+              cause: error,
             });
           }
         }),

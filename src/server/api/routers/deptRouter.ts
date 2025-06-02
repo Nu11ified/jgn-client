@@ -714,6 +714,21 @@ const getRankLimitInfo = async (
   }
 };
 
+function assertCanActOnMember({ actorDiscordId, actorRankLevel, targetDiscordId, targetRankLevel, actionName }: { actorDiscordId: string; actorRankLevel: number; targetDiscordId: string; targetRankLevel: number; actionName: string; }) {
+  if (actorDiscordId === targetDiscordId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `You cannot ${actionName} for yourself.`,
+    });
+  }
+  if (targetRankLevel >= actorRankLevel) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `You cannot ${actionName} for someone of equal or higher rank.`,
+    });
+  }
+}
+
 // Utility function to update user's team based on their current Discord roles
 const updateUserTeamFromDiscordRoles = async (discordId: string, departmentId?: number): Promise<{ 
   success: boolean; 
@@ -4155,21 +4170,14 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Check if trying to promote themselves
-            if (member.discordId === String(ctx.dbUser.discordId)) {
-              throw new TRPCError({
-                code: "FORBIDDEN",
-                message: "You cannot promote yourself",
-              });
-            }
-
-            // Check if target member has equal or higher rank level than promoter
-            if (member.currentRankLevel && member.currentRankLevel >= promoter[0]!.level!) {
-              throw new TRPCError({
-                code: "FORBIDDEN",
-                message: "You cannot promote someone of equal or higher rank",
-              });
-            }
+            // Prevent acting on self or equal/higher rank
+            assertCanActOnMember({
+              actorDiscordId: String(ctx.dbUser.discordId),
+              actorRankLevel: promoter[0]!.level!,
+              targetDiscordId: member.discordId,
+              targetRankLevel: member.currentRankLevel!,
+              actionName: "promote"
+            });
 
             // Get the target rank info
             const targetRank = await postgrestDb
@@ -4382,6 +4390,15 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
+            // Prevent acting on self or equal/higher rank
+            assertCanActOnMember({
+              actorDiscordId: String(ctx.dbUser.discordId),
+              actorRankLevel: demoter[0]!.level!,
+              targetDiscordId: member.discordId,
+              targetRankLevel: member.currentRankLevel!,
+              actionName: "demote"
+            });
+
             // Get the target rank info
             const targetRank = await postgrestDb
               .select()
@@ -4398,14 +4415,6 @@ export const deptRouter = createTRPCRouter({
               throw new TRPCError({
                 code: "NOT_FOUND",
                 message: "Target rank not found in this department",
-              });
-            }
-
-            // Check if demoter has sufficient rank level
-            if (member.currentRankLevel && member.currentRankLevel >= demoter[0]!.level!) {
-              throw new TRPCError({
-                code: "FORBIDDEN",
-                message: "You cannot demote someone of equal or higher rank",
               });
             }
 
@@ -4616,6 +4625,7 @@ export const deptRouter = createTRPCRouter({
               .select({
                 departmentId: deptSchema.departmentMembers.departmentId,
                 discordId: deptSchema.departmentMembers.discordId,
+                rankId: deptSchema.departmentMembers.rankId,
               })
               .from(deptSchema.departmentMembers)
               .where(eq(deptSchema.departmentMembers.id, input.memberId))
@@ -4630,10 +4640,21 @@ export const deptRouter = createTRPCRouter({
 
             const member = targetMember[0]!;
 
-            // Check issuer permissions
+            // Get target member's rank level
+            const targetRank = member.rankId
+              ? await postgrestDb
+                  .select({ level: deptSchema.departmentRanks.level })
+                  .from(deptSchema.departmentRanks)
+                  .where(eq(deptSchema.departmentRanks.id, member.rankId))
+                  .limit(1)
+              : [];
+            const targetRankLevel = targetRank.length > 0 ? targetRank[0]!.level : 0;
+
+            // Check issuer permissions and get issuer's rank level
             const issuer = await postgrestDb
               .select({
                 permissions: deptSchema.departmentRanks.permissions,
+                level: deptSchema.departmentRanks.level,
               })
               .from(deptSchema.departmentMembers)
               .leftJoin(
@@ -4663,6 +4684,15 @@ export const deptRouter = createTRPCRouter({
                 message: "You do not have permission to issue disciplinary actions",
               });
             }
+
+            // Prevent acting on self or equal/higher rank
+            assertCanActOnMember({
+              actorDiscordId: String(ctx.dbUser.discordId),
+              actorRankLevel: issuer[0]!.level!,
+              targetDiscordId: member.discordId,
+              targetRankLevel,
+              actionName: "discipline"
+            });
 
             // Create disciplinary action
             const result = await postgrestDb
@@ -4792,6 +4822,7 @@ export const deptRouter = createTRPCRouter({
                 isActive: deptSchema.departmentDisciplinaryActions.isActive,
                 departmentId: deptSchema.departmentMembers.departmentId,
                 memberDiscordId: deptSchema.departmentMembers.discordId,
+                memberRankId: deptSchema.departmentMembers.rankId,
               })
               .from(deptSchema.departmentDisciplinaryActions)
               .innerJoin(
@@ -4817,10 +4848,21 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Check permissions - user must have discipline_members permission
+            // Get target member's rank level
+            const targetRank = disciplinaryAction.memberRankId
+              ? await postgrestDb
+                  .select({ level: deptSchema.departmentRanks.level })
+                  .from(deptSchema.departmentRanks)
+                  .where(eq(deptSchema.departmentRanks.id, disciplinaryAction.memberRankId))
+                  .limit(1)
+              : [];
+            const targetRankLevel = targetRank.length > 0 ? targetRank[0]!.level : 0;
+
+            // Check permissions - user must have discipline_members permission and get their rank level
             const requester = await postgrestDb
               .select({
                 permissions: deptSchema.departmentRanks.permissions,
+                level: deptSchema.departmentRanks.level,
               })
               .from(deptSchema.departmentMembers)
               .leftJoin(
@@ -4850,6 +4892,15 @@ export const deptRouter = createTRPCRouter({
                 message: "You do not have permission to dismiss disciplinary actions",
               });
             }
+
+            // Prevent acting on self or equal/higher rank
+            assertCanActOnMember({
+              actorDiscordId: String(ctx.dbUser.discordId),
+              actorRankLevel: requester[0]!.level!,
+              targetDiscordId: disciplinaryAction.memberDiscordId,
+              targetRankLevel,
+              actionName: "dismiss a disciplinary action"
+            });
 
             // Mark the disciplinary action as inactive
             const result = await postgrestDb
@@ -7846,3 +7897,6 @@ export const deptRouter = createTRPCRouter({
       }),
   }),
 });
+
+
+

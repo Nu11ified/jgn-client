@@ -160,4 +160,23 @@ export type UserServerRoleInDB = z.infer<typeof ZodUserServerRoleInDB>;
 export type BanHistoryInDB = z.infer<typeof ZodBanHistoryInDB>;
 export type TeamSpeakServerGroupInDB = z.infer<typeof ZodTeamSpeakServerGroupInDB>;
 export type UserTeamSpeakServerGroupInDB = z.infer<typeof ZodUserTeamSpeakServerGroupInDB>;
-export type DiscordRoleToTeamSpeakGroupMappingInDB = z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>; 
+export type DiscordRoleToTeamSpeakGroupMappingInDB = z.infer<typeof ZodDiscordRoleToTeamSpeakGroupMappingInDB>;
+
+// Form Response Augmented Types (with user details)
+export interface AugmentedReviewerDecision {
+  userId?: string;
+  reviewerName?: string;
+  decision: string;
+  comments?: string;
+  reviewedAt: string;
+  reviewerFullName?: string;
+  reviewerDiscordId?: string;
+}
+
+export interface AugmentedFormResponse {
+  submitterFullName?: string;
+  submitterDiscordId?: string;
+  finalApproverFullName?: string;
+  finalApproverDiscordId?: string;
+  reviewerDecisions?: AugmentedReviewerDecision[] | null;
+} 

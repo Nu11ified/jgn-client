@@ -1118,15 +1118,94 @@ export const formRouter = createTRPCRouter({
             nextCursor = nextItem.submittedAt.toISOString();
         }
       }
-      
-      // Explicitly type the items in the return if necessary for UI consumption
-      const typedSubmissions = submissions.map(s => ({
-        ...s,
-        form: s.form as { id: number; title: string | null } | undefined,
-      }));
 
+      // Step 1: Collect all unique JWT sub IDs (string user.id from auth-schema)
+      const jwtSubIds = new Set<string>();
+      submissions.forEach(item => {
+        if (item.userId) jwtSubIds.add(item.userId);
+        if (item.finalApproverId) jwtSubIds.add(item.finalApproverId);
+        item.reviewerDecisions?.forEach(decision => {
+          if (decision.userId) jwtSubIds.add(decision.userId);
+        });
+      });
+
+      const finalUserDetailsMap = new Map<string, { fullName?: string | null; discordId?: string | null }>();
+
+      if (jwtSubIds.size > 0) {
+        // Step 2: Get accountId (Discord ID string) from authAccount table using jwtSubIds
+        const accountInfos = await db
+          .select({
+            userId: authAccount.userId, // This is the JWT Sub ID
+            discordAccountId: authAccount.accountId, // This is the Discord ID (string)
+          })
+          .from(authAccount)
+          .where(inArray(authAccount.userId, Array.from(jwtSubIds)))
+          .execute();
+
+        const jwtSubToDiscordIdMap = new Map<string, string>();
+        accountInfos.forEach(acc => {
+          if (acc.discordAccountId) { // Ensure discordAccountId is not null
+            jwtSubToDiscordIdMap.set(acc.userId, acc.discordAccountId);
+          }
+        });
+        
+        const discordIdStrings = Array.from(jwtSubToDiscordIdMap.values());
+        const discordIdsToFetch = discordIdStrings.map(id => BigInt(id)).filter(id => !isNaN(Number(id)));
+
+        if (discordIdsToFetch.length > 0) {
+          // Step 3: Get username from users table using discordIds (bigint)
+          const userSchemaDetails = await db
+            .select({
+              retrievedDiscordId: users.discordId, // bigint
+              username: users.username, // string (this will be fullName)
+            })
+            .from(users)
+            .where(inArray(users.discordId, discordIdsToFetch))
+            .execute();
+
+          const discordIdToUsernameMap = new Map<string, string>();
+          userSchemaDetails.forEach(ud => {
+            discordIdToUsernameMap.set(String(ud.retrievedDiscordId), ud.username ?? 'Unknown User');
+          });
+
+          // Step 4: Populate the finalUserDetailsMap (jwtSubId -> { fullName, discordId })
+          jwtSubToDiscordIdMap.forEach((discordIdStr, jwtSub) => {
+            const username = discordIdToUsernameMap.get(discordIdStr);
+            finalUserDetailsMap.set(jwtSub, {
+              fullName: username,
+              discordId: discordIdStr,
+            });
+          });
+        }
+      }
+
+      // Augment submissions with user details
+      const augmentedSubmissions = submissions.map(item => {
+        const submitterDetails = item.userId ? finalUserDetailsMap.get(item.userId) : undefined;
+        const finalApproverDetails = item.finalApproverId ? finalUserDetailsMap.get(item.finalApproverId) : undefined;
+
+        const augmentedReviewerDecisions = item.reviewerDecisions?.map(decision => {
+          const reviewerDetails = decision.userId ? finalUserDetailsMap.get(decision.userId) : undefined;
+          return {
+            ...decision,
+            reviewerFullName: reviewerDetails?.fullName ?? decision.reviewerName, // Fallback to existing reviewerName
+            reviewerDiscordId: reviewerDetails?.discordId,
+          };
+        });
+
+        return {
+          ...item,
+          submitterFullName: submitterDetails?.fullName,
+          submitterDiscordId: submitterDetails?.discordId,
+          finalApproverFullName: finalApproverDetails?.fullName,
+          finalApproverDiscordId: finalApproverDetails?.discordId,
+          reviewerDecisions: augmentedReviewerDecisions,
+          form: item.form as { id: number; title: string | null } | undefined,
+        };
+      });
+      
       return {
-        items: typedSubmissions,
+        items: augmentedSubmissions,
         nextCursor,
       };
     }),
@@ -1174,6 +1253,7 @@ export const formRouter = createTRPCRouter({
         responseId: formResponses.id,
         responseStatus: formResponses.status,
         submittedAt: formResponses.submittedAt,
+        userId: formResponses.userId,
         formId: forms.id,
         formTitle: forms.title,
         formDescription: forms.description,
@@ -1193,12 +1273,89 @@ export const formRouter = createTRPCRouter({
           nextCursor = nextItem.responseId.toString();
         }
       }
+
+      // Step 1: Collect all unique JWT sub IDs (string user.id from auth-schema)
+      const jwtSubIds = new Set<string>();
+      items.forEach(item => {
+        if (item.userId) jwtSubIds.add(item.userId);
+        item.reviewerDecisions?.forEach(decision => {
+          if (decision.userId) jwtSubIds.add(decision.userId);
+        });
+      });
+
+      const finalUserDetailsMap = new Map<string, { fullName?: string | null; discordId?: string | null }>();
+
+      if (jwtSubIds.size > 0) {
+        // Step 2: Get accountId (Discord ID string) from authAccount table using jwtSubIds
+        const accountInfos = await db
+          .select({
+            userId: authAccount.userId, // This is the JWT Sub ID
+            discordAccountId: authAccount.accountId, // This is the Discord ID (string)
+          })
+          .from(authAccount)
+          .where(inArray(authAccount.userId, Array.from(jwtSubIds)))
+          .execute();
+
+        const jwtSubToDiscordIdMap = new Map<string, string>();
+        accountInfos.forEach(acc => {
+          if (acc.discordAccountId) { // Ensure discordAccountId is not null
+            jwtSubToDiscordIdMap.set(acc.userId, acc.discordAccountId);
+          }
+        });
+        
+        const discordIdStrings = Array.from(jwtSubToDiscordIdMap.values());
+        const discordIdsToFetch = discordIdStrings.map(id => BigInt(id)).filter(id => !isNaN(Number(id)));
+
+        if (discordIdsToFetch.length > 0) {
+          // Step 3: Get username from users table using discordIds (bigint)
+          const userSchemaDetails = await db
+            .select({
+              retrievedDiscordId: users.discordId, // bigint
+              username: users.username, // string (this will be fullName)
+            })
+            .from(users)
+            .where(inArray(users.discordId, discordIdsToFetch))
+            .execute();
+
+          const discordIdToUsernameMap = new Map<string, string>();
+          userSchemaDetails.forEach(ud => {
+            discordIdToUsernameMap.set(String(ud.retrievedDiscordId), ud.username ?? 'Unknown User');
+          });
+
+          // Step 4: Populate the finalUserDetailsMap (jwtSubId -> { fullName, discordId })
+          jwtSubToDiscordIdMap.forEach((discordIdStr, jwtSub) => {
+            const username = discordIdToUsernameMap.get(discordIdStr);
+            finalUserDetailsMap.set(jwtSub, {
+              fullName: username,
+              discordId: discordIdStr,
+            });
+          });
+        }
+      }
+
+      // Augment items with user details
+      const augmentedItems = items.map(item => {
+        const submitterDetails = item.userId ? finalUserDetailsMap.get(item.userId) : undefined;
+
+        const augmentedReviewerDecisions = item.reviewerDecisions?.map(decision => {
+          const reviewerDetails = decision.userId ? finalUserDetailsMap.get(decision.userId) : undefined;
+          return {
+            ...decision,
+            reviewerFullName: reviewerDetails?.fullName ?? decision.reviewerName, // Fallback to existing reviewerName
+            reviewerDiscordId: reviewerDetails?.discordId,
+          };
+        });
+
+        return {
+          ...item,
+          submitterFullName: submitterDetails?.fullName,
+          submitterDiscordId: submitterDetails?.discordId,
+          reviewerDecisions: augmentedReviewerDecisions ?? [],
+        };
+      });
       
       return {
-        items: items.map(item => ({
-          ...item,
-          reviewerDecisions: item.reviewerDecisions ?? [],
-        })),
+        items: augmentedItems,
         nextCursor,
       };
     }),
@@ -1241,6 +1398,7 @@ export const formRouter = createTRPCRouter({
         responseId: formResponses.id,
         responseStatus: formResponses.status,
         submittedAt: formResponses.submittedAt,
+        userId: formResponses.userId,
         formId: forms.id,
         formTitle: forms.title,
         formDescription: forms.description,
@@ -1259,7 +1417,75 @@ export const formRouter = createTRPCRouter({
           nextCursor = nextItem.responseId.toString();
         }
       }
-      return { items, nextCursor };
+
+      // Step 1: Collect all unique JWT sub IDs (string user.id from auth-schema)
+      const jwtSubIds = new Set<string>();
+      items.forEach(item => {
+        if (item.userId) jwtSubIds.add(item.userId);
+      });
+
+      const finalUserDetailsMap = new Map<string, { fullName?: string | null; discordId?: string | null }>();
+
+      if (jwtSubIds.size > 0) {
+        // Step 2: Get accountId (Discord ID string) from authAccount table using jwtSubIds
+        const accountInfos = await db
+          .select({
+            userId: authAccount.userId, // This is the JWT Sub ID
+            discordAccountId: authAccount.accountId, // This is the Discord ID (string)
+          })
+          .from(authAccount)
+          .where(inArray(authAccount.userId, Array.from(jwtSubIds)))
+          .execute();
+
+        const jwtSubToDiscordIdMap = new Map<string, string>();
+        accountInfos.forEach(acc => {
+          if (acc.discordAccountId) { // Ensure discordAccountId is not null
+            jwtSubToDiscordIdMap.set(acc.userId, acc.discordAccountId);
+          }
+        });
+        
+        const discordIdStrings = Array.from(jwtSubToDiscordIdMap.values());
+        const discordIdsToFetch = discordIdStrings.map(id => BigInt(id)).filter(id => !isNaN(Number(id)));
+
+        if (discordIdsToFetch.length > 0) {
+          // Step 3: Get username from users table using discordIds (bigint)
+          const userSchemaDetails = await db
+            .select({
+              retrievedDiscordId: users.discordId, // bigint
+              username: users.username, // string (this will be fullName)
+            })
+            .from(users)
+            .where(inArray(users.discordId, discordIdsToFetch))
+            .execute();
+
+          const discordIdToUsernameMap = new Map<string, string>();
+          userSchemaDetails.forEach(ud => {
+            discordIdToUsernameMap.set(String(ud.retrievedDiscordId), ud.username ?? 'Unknown User');
+          });
+
+          // Step 4: Populate the finalUserDetailsMap (jwtSubId -> { fullName, discordId })
+          jwtSubToDiscordIdMap.forEach((discordIdStr, jwtSub) => {
+            const username = discordIdToUsernameMap.get(discordIdStr);
+            finalUserDetailsMap.set(jwtSub, {
+              fullName: username,
+              discordId: discordIdStr,
+            });
+          });
+        }
+      }
+
+      // Augment items with user details
+      const augmentedItems = items.map(item => {
+        const submitterDetails = item.userId ? finalUserDetailsMap.get(item.userId) : undefined;
+
+        return {
+          ...item,
+          submitterFullName: submitterDetails?.fullName,
+          submitterDiscordId: submitterDetails?.discordId,
+        };
+      });
+
+      return { items: augmentedItems, nextCursor };
     }),
 
   // -------------------- DRAFT FUNCTIONALITY --------------------

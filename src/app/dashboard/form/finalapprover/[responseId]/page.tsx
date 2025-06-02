@@ -19,10 +19,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ArrowLeft, Loader2, ThumbsUp, ThumbsDown, Info, EyeOff, AlertTriangle, CheckCircle, MessageSquare } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
-type FormResponseWithFullForm = RouterOutputs["form"]["getResponseById"];
+type BaseFormResponse = RouterOutputs["form"]["getResponseById"];
+type FormResponseWithFullForm = BaseFormResponse & {
+  reviewerDecisions?: (NonNullable<BaseFormResponse["reviewerDecisions"]>[number] & {
+    reviewerFullName?: string;
+    reviewerDiscordId?: string;
+  })[] | null;
+};
 type FormQuestionDefinition = FormResponseWithFullForm["form"]["questions"][number];
 type AnswerItem = FormResponseWithFullForm["answers"][number];
-type ReviewerDecisionEntry = NonNullable<FormResponseWithFullForm["reviewerDecisions"]>[number];
 
 const FinalApprovalSubmissionPage = () => {
   const params = useParams();
@@ -195,7 +200,12 @@ const FinalApprovalSubmissionPage = () => {
                     <CardHeader className="pb-2">
                       <div className="flex justify-between items-center">
                         <CardTitle className="text-md">
-                          Reviewer {review.userId.substring(0,8)}... {/* Show partial ID or fetch reviewer name */}
+                          {review.reviewerFullName || 'Unknown'} 
+                          {review.reviewerDiscordId && (
+                            <span className="text-sm text-muted-foreground ml-2">
+                              ({review.reviewerDiscordId})
+                            </span>
+                          )}
                         </CardTitle>
                         <Badge variant={review.decision === 'yes' ? 'default' : 'destructive'} 
                                className={`capitalize ${review.decision === 'yes' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>

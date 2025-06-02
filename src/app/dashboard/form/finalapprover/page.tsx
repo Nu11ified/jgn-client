@@ -111,6 +111,10 @@ const FinalApproverDashboardPage = () => {
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground">
+                Submitted by: {response.submitterFullName ?? `User ID: ${response.userId}`}
+                {response.submitterDiscordId && ` (Discord: ${response.submitterDiscordId})`}
+              </p>
+              <p className="text-sm text-muted-foreground">
                 Submitted on: {new Date(response.submittedAt).toLocaleDateString()} at {new Date(response.submittedAt).toLocaleTimeString()}
               </p>
               {/* TODO: Could show summary of reviewer decisions here if that data is added to listFormResponsesForFinalApprover */}

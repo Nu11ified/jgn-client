@@ -147,12 +147,79 @@ export default function TrainingManagementPage() {
     },
   });
 
+  // Bypass training mutation
+  const bypassTrainingMutation = api.dept.admin.memberManagement.bypassTraining.useMutation({
+    onSuccess: () => {
+      toast.success("Training bypassed successfully. Member moved to pending assignment.");
+      void refetch(); // Refetch training data to update the UI
+    },
+    onError: (error) => {
+      toast.error(`Failed to bypass training: ${error.message}`);
+    },
+  });
+
+  // Assign team mutation
+  const assignTeamMutation = api.dept.admin.memberManagement.assignTeam.useMutation({
+    onSuccess: () => {
+      toast.success("Team assigned successfully. Member is now active.");
+      void refetch(); // Refetch training data to update the UI
+      setIsAssignTeamDialogOpen(false);
+      setSelectedMemberForTeam(null);
+    },
+    onError: (error) => {
+      toast.error(`Failed to assign team: ${error.message}`);
+    },
+  });
+
+  // State for team assignment dialog
+  const [isAssignTeamDialogOpen, setIsAssignTeamDialogOpen] = useState(false);
+  const [selectedMemberForTeam, setSelectedMemberForTeam] = useState<{id: number, name: string} | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+
   const handleCreateMeeting = (data: CreateMeetingFormData) => {
     createMeetingMutation.mutate({
       ...data,
       departmentId,
       scheduledAt: new Date(data.scheduledAt),
     });
+  };
+
+  const handleBypassTraining = (memberId: number, memberName: string) => {
+    const confirmed = confirm(
+      `Skip training for "${memberName}"?\n\n` +
+      `This will move them directly to "Pending Assignment" status ` +
+      `where they can be assigned to a team.\n\n` +
+      `Are you sure you want to bypass their training?`
+    );
+    
+    if (confirmed) {
+      bypassTrainingMutation.mutate({ memberId });
+    }
+  };
+
+  const handleAssignTeam = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedMemberForTeam || !selectedTeamId) {
+      toast.error("Please select a team");
+      return;
+    }
+
+    const teamName = teams?.find(t => t.id.toString() === selectedTeamId)?.name ?? "Selected Team";
+    const confirmed = confirm(
+      `Assign "${selectedMemberForTeam.name}" to "${teamName}"?\n\n` +
+      `This will:\n` +
+      `• Move them from "Pending Assignment" to "Active" status\n` +
+      `• Set their primary team to "${teamName}"\n` +
+      `• Grant them team access and Discord roles\n\n` +
+      `Are you sure?`
+    );
+
+    if (confirmed) {
+      assignTeamMutation.mutate({ 
+        memberId: selectedMemberForTeam.id, 
+        teamId: parseInt(selectedTeamId) 
+      });
+    }
   };
 
   const formatDateTime = (date: Date | string) => {
@@ -582,148 +649,244 @@ export default function TrainingManagementPage() {
             </p>
           </div>
 
-          {/* Controls */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Settings className="h-5 w-5" />
-                View Options
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  id="include-completed"
-                  checked={includeCompleted}
-                  onChange={(e) => setIncludeCompleted(e.target.checked)}
-                  className="h-4 w-4 rounded border-input bg-background text-primary focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                />
-                <label htmlFor="include-completed" className="text-sm font-medium cursor-pointer">
-                  Include recently activated members
-                </label>
-              </div>
-            </CardContent>
-          </Card>
-
-          {isLoading ? (
-            <div className="space-y-4">
-              {Array.from({ length: 3 }, (_, i: number) => (
-                <Card key={i}>
-                  <CardHeader>
-                    <Skeleton className="h-6 w-48" />
-                    <Skeleton className="h-4 w-64" />
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {Array.from({ length: 3 }, (_, j: number) => (
-                        <Skeleton key={j} className="h-16 w-full" />
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+        {/* Controls */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Settings className="h-5 w-5" />
+              View Options
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="include-completed"
+                checked={includeCompleted}
+                onChange={(e) => setIncludeCompleted(e.target.checked)}
+                className="h-4 w-4 rounded border-input bg-background text-primary focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <label htmlFor="include-completed" className="text-sm font-medium cursor-pointer">
+                Include recently activated members
+              </label>
             </div>
-          ) : (
-            <div className="space-y-6">
-              {/* In Training Members */}
-              <Card>
+          </CardContent>
+        </Card>
+
+        {isLoading ? (
+          <div className="space-y-4">
+            {Array.from({ length: 3 }, (_, i: number) => (
+              <Card key={i}>
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Clock className="h-5 w-5 text-yellow-500" />
-                    In Training ({trainingData?.members.in_training?.length ?? 0})
-                  </CardTitle>
-                  <CardDescription>
-                    New recruits currently undergoing training
-                  </CardDescription>
+                  <Skeleton className="h-6 w-48" />
+                  <Skeleton className="h-4 w-64" />
                 </CardHeader>
                 <CardContent>
-                  {trainingData?.members.in_training?.length === 0 ? (
-                    <div className="text-center py-8">
-                      <GraduationCap className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                      <h3 className="text-lg font-semibold mb-2">No Members in Training</h3>
-                      <p className="text-muted-foreground">
-                        All new recruits have completed their training.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {trainingData?.members.in_training?.map((member) => (
-                        <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
-                          <div className="flex items-center space-x-4">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <h4 className="font-medium">
-                                  {member.roleplayName ?? 'No Name'}
-                                </h4>
-                                <Badge className={getStatusColor(member.status)}>
-                                  {formatStatus(member.status)}
-                                </Badge>
-                              </div>
-                              <div className="text-sm text-muted-foreground space-y-1">
-                                <p>Discord: {member.discordId}</p>
-                                <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
-                                <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
-                                {member.notes && (
-                                  <p>Notes: {member.notes}</p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          
-                          <div className="flex items-center space-x-2">
-                            {canManageMembers?.hasPermission && (
-                              <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
-                                <Button variant="outline" size="sm">
-                                  <Edit className="h-4 w-4" />
-                                </Button>
-                              </Link>
-                            )}
-                            {trainingData?.canBypassTraining && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  // TODO: Implement bypass training
-                                  toast.info("Bypass training functionality will be implemented");
-                                }}
-                              >
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                                Skip Training
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {Array.from({ length: 3 }, (_, j: number) => (
+                      <Skeleton key={j} className="h-16 w-full" />
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* In Training Members */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-yellow-500" />
+                  In Training ({trainingData?.members.in_training?.length ?? 0})
+                </CardTitle>
+                <CardDescription>
+                  New recruits currently undergoing training
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {trainingData?.members.in_training?.length === 0 ? (
+                  <div className="text-center py-8">
+                    <GraduationCap className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">No Members in Training</h3>
+                    <p className="text-muted-foreground">
+                      All new recruits have completed their training.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {trainingData?.members.in_training?.map((member) => (
+                      <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div className="flex items-center space-x-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-medium">
+                                {member.roleplayName ?? 'No Name'}
+                              </h4>
+                              <Badge className={getStatusColor(member.status)}>
+                                {formatStatus(member.status)}
+                              </Badge>
+                            </div>
+                            <div className="text-sm text-muted-foreground space-y-1">
+                              <p>Discord: {member.discordId}</p>
+                              <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
+                              <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
+                              {member.notes && (
+                                <p>Notes: {member.notes}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center space-x-2">
+                          {canManageMembers?.hasPermission && (
+                            <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
+                              <Button variant="outline" size="sm">
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            </Link>
+                          )}
+                          {trainingData?.canBypassTraining && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                                onClick={() => handleBypassTraining(member.id, member.roleplayName ?? 'No Name')}
+                                disabled={bypassTrainingMutation.isPending}
+                              >
+                                {bypassTrainingMutation.isPending ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Processing...
+                                  </>
+                                ) : (
+                                  <>
+                              <CheckCircle className="h-4 w-4 mr-2" />
+                              Skip Training
+                                  </>
+                                )}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
-              {/* Pending Assignment Members */}
+            {/* Pending Assignment Members */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <UserX className="h-5 w-5 text-blue-500" />
+                  Pending Assignment ({trainingData?.members.pending?.length ?? 0})
+                </CardTitle>
+                <CardDescription>
+                  Members who completed training and need team assignment
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {trainingData?.members.pending?.length === 0 ? (
+                  <div className="text-center py-8">
+                    <UserCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">No Pending Assignments</h3>
+                    <p className="text-muted-foreground">
+                      All members have been assigned to teams.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {trainingData?.members.pending?.map((member) => (
+                      <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div className="flex items-center space-x-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-medium">
+                                {member.roleplayName ?? 'No Name'}
+                              </h4>
+                              <Badge className={getStatusColor(member.status)}>
+                                {formatStatus(member.status)}
+                              </Badge>
+                              {member.rankName && (
+                                <Badge variant="outline">
+                                  {member.rankName} (Lvl {member.rankLevel})
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="text-sm text-muted-foreground space-y-1">
+                              <p>Discord: {member.discordId}</p>
+                              <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
+                              <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
+                              <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
+                              {member.notes && (
+                                <p>Notes: {member.notes}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center space-x-2">
+                          {canManageMembers?.hasPermission && (
+                            <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
+                              <Button variant="outline" size="sm">
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            </Link>
+                          )}
+                          {trainingData?.canAssignTeams && (
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => {
+                                  setIsAssignTeamDialogOpen(true);
+                                  setSelectedMemberForTeam({id: member.id, name: member.roleplayName ?? 'No Name'});
+                                }}
+                                disabled={assignTeamMutation.isPending}
+                              >
+                                {assignTeamMutation.isPending ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Assigning...
+                                  </>
+                                ) : (
+                                  <>
+                              <UserCheck className="h-4 w-4 mr-2" />
+                              Assign Team
+                                  </>
+                                )}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Recently Activated Members (if included) */}
+            {includeCompleted && trainingData?.members.active && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <UserX className="h-5 w-5 text-blue-500" />
-                    Pending Assignment ({trainingData?.members.pending?.length ?? 0})
+                    <UserCheck className="h-5 w-5 text-green-500" />
+                    Recently Activated ({trainingData.members.active.length})
                   </CardTitle>
                   <CardDescription>
-                    Members who completed training and need team assignment
+                    Members who were recently assigned and activated
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {trainingData?.members.pending?.length === 0 ? (
-                    <div className="text-center py-8">
-                      <UserCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                      <h3 className="text-lg font-semibold mb-2">No Pending Assignments</h3>
+                  {trainingData.members.active.length === 0 ? (
+                    <div className="text-center py-4">
                       <p className="text-muted-foreground">
-                        All members have been assigned to teams.
+                        No recently activated members.
                       </p>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {trainingData?.members.pending?.map((member) => (
-                        <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
+                      {trainingData.members.active.map((member) => (
+                        <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
                           <div className="flex items-center space-x-4">
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-1">
@@ -738,15 +901,17 @@ export default function TrainingManagementPage() {
                                     {member.rankName} (Lvl {member.rankLevel})
                                   </Badge>
                                 )}
+                                {member.teamName && (
+                                  <Badge variant="secondary">
+                                    {member.teamName}
+                                  </Badge>
+                                )}
                               </div>
                               <div className="text-sm text-muted-foreground space-y-1">
                                 <p>Discord: {member.discordId}</p>
                                 <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
                                 <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
                                 <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
-                                {member.notes && (
-                                  <p>Notes: {member.notes}</p>
-                                )}
                               </div>
                             </div>
                           </div>
@@ -759,19 +924,7 @@ export default function TrainingManagementPage() {
                                 </Button>
                               </Link>
                             )}
-                            {trainingData?.canAssignTeams && (
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={() => {
-                                  // TODO: Implement team assignment
-                                  toast.info("Team assignment functionality will be implemented");
-                                }}
-                              >
-                                <UserCheck className="h-4 w-4 mr-2" />
-                                Assign Team
-                              </Button>
-                            )}
+                            <CheckCircle className="h-5 w-5 text-green-500" />
                           </div>
                         </div>
                       ))}
@@ -779,78 +932,9 @@ export default function TrainingManagementPage() {
                   )}
                 </CardContent>
               </Card>
-
-              {/* Recently Activated Members (if included) */}
-              {includeCompleted && trainingData?.members.active && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <UserCheck className="h-5 w-5 text-green-500" />
-                      Recently Activated ({trainingData.members.active.length})
-                    </CardTitle>
-                    <CardDescription>
-                      Members who were recently assigned and activated
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {trainingData.members.active.length === 0 ? (
-                      <div className="text-center py-4">
-                        <p className="text-muted-foreground">
-                          No recently activated members.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {trainingData.members.active.map((member) => (
-                          <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
-                            <div className="flex items-center space-x-4">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <h4 className="font-medium">
-                                    {member.roleplayName ?? 'No Name'}
-                                  </h4>
-                                  <Badge className={getStatusColor(member.status)}>
-                                    {formatStatus(member.status)}
-                                  </Badge>
-                                  {member.rankName && (
-                                    <Badge variant="outline">
-                                      {member.rankName} (Lvl {member.rankLevel})
-                                    </Badge>
-                                  )}
-                                  {member.teamName && (
-                                    <Badge variant="secondary">
-                                      {member.teamName}
-                                    </Badge>
-                                  )}
-                                </div>
-                                <div className="text-sm text-muted-foreground space-y-1">
-                                  <p>Discord: {member.discordId}</p>
-                                  <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
-                                  <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
-                                  <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
-                                </div>
-                              </div>
-                            </div>
-                            
-                            <div className="flex items-center space-x-2">
-                              {canManageMembers?.hasPermission && (
-                                <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
-                                  <Button variant="outline" size="sm">
-                                    <Edit className="h-4 w-4" />
-                                  </Button>
-                                </Link>
-                              )}
-                              <CheckCircle className="h-5 w-5 text-green-500" />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          )}
+            )}
+          </div>
+        )}
         </div>
 
         {/* Quick Actions */}
@@ -880,6 +964,76 @@ export default function TrainingManagementPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Team Assignment Dialog */}
+      {isAssignTeamDialogOpen && selectedMemberForTeam && (
+        <Dialog 
+          open={isAssignTeamDialogOpen} 
+          onOpenChange={(open) => {
+            setIsAssignTeamDialogOpen(open);
+            if (!open) {
+              setSelectedMemberForTeam(null);
+              setSelectedTeamId("");
+            }
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Assign Team to {selectedMemberForTeam.name}</DialogTitle>
+              <DialogDescription>
+                Select a team for {selectedMemberForTeam.name} to join. This will activate them and grant team access.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleAssignTeam} className="space-y-4">
+              <div>
+                <Label htmlFor="teamId">Team *</Label>
+                <Select 
+                  value={selectedTeamId} 
+                  onValueChange={(value) => setSelectedTeamId(value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {teams?.map((team) => (
+                      <SelectItem key={team.id} value={team.id.toString()}>
+                        {team.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <DialogFooter>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => {
+                    setIsAssignTeamDialogOpen(false);
+                    setSelectedMemberForTeam(null);
+                    setSelectedTeamId("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={assignTeamMutation.isPending || !selectedTeamId}
+                >
+                  {assignTeamMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Assigning...
+                    </>
+                  ) : (
+                    "Assign Team"
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 } 

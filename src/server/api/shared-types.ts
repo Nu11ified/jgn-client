@@ -5,10 +5,10 @@ import { z } from "zod";
 
 // Admin API Types (from OpenAPI specs)
 export const ZodUserInDB = z.object({
-  id: z.string(),
+  id: z.string().optional(),
   username: z.string(),
-  discriminator: z.string(),
-  avatar: z.string().nullable(),
+  discriminator: z.string().optional(),
+  avatar: z.string().nullable().optional(),
   bot: z.boolean().optional(),
   system: z.boolean().optional(),
   mfa_enabled: z.boolean().optional(),
@@ -22,12 +22,17 @@ export const ZodUserInDB = z.object({
   public_flags: z.number().optional(),
   avatar_decoration: z.string().nullable().optional(),
   ts_uid: z.string().nullable().optional(),
+  is_admin: z.boolean().optional(),
+  is_moderator: z.boolean().optional(),
+  discord_id: z.string().optional(),
+  api_key: z.string().optional(),
+  last_synced: z.string().optional(),
 });
 
 export const ZodServerInDB = z.object({
-  id: z.string(),
-  name: z.string(),
-  icon: z.string().nullable(),
+  server_id: z.string().optional(),
+  server_name: z.string().optional(),
+  icon: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   splash: z.string().nullable().optional(),
   discovery_splash: z.string().nullable().optional(),
@@ -80,17 +85,17 @@ export const ZodUserServerMembershipInDB = z.object({
 });
 
 export const ZodRoleInDB = z.object({
-  id: z.string(),
-  server_id: z.string(),
-  name: z.string(),
-  color: z.number(),
-  hoist: z.boolean(),
+  role_id: z.string().optional(),
+  server_id: z.string().optional(),
+  role_name: z.string().optional(),
+  color: z.number().optional(),
+  hoist: z.boolean().optional(),
   icon: z.string().nullable().optional(),
   unicode_emoji: z.string().nullable().optional(),
-  position: z.number(),
-  permissions: z.string(),
-  managed: z.boolean(),
-  mentionable: z.boolean(),
+  position: z.number().optional(),
+  permissions: z.string().optional(),
+  managed: z.boolean().optional(),
+  mentionable: z.boolean().optional(),
   tags: z.record(z.unknown()).optional(),
   flags: z.number().optional(),
 });
@@ -102,29 +107,32 @@ export const ZodUserServerRoleInDB = z.object({
 });
 
 export const ZodBanHistoryInDB = z.object({
-  id: z.number(),
-  user_id: z.string(),
-  server_id: z.string(),
-  reason: z.string().nullable(),
-  banned_at: z.string(),
-  banned_by: z.string(),
-  expires_at: z.string().nullable(),
-  is_active: z.boolean(),
+  id: z.number().optional(),
+  user_discord_id: z.string().optional(),
+  server_id: z.string().optional(),
+  reason: z.string().nullable().optional(),
+  banned_at: z.string().optional(),
+  banned_by_user_id: z.string().nullable().optional(),
+  expires_at: z.string().nullable().optional(),
+  is_active: z.boolean().optional(),
+  user_id: z.string().optional(),
+  banned_by: z.string().nullable().optional(),
 });
 
 export const ZodTeamSpeakServerGroupInDB = z.object({
-  id: z.number(),
-  server_id: z.string(),
-  group_id: z.number(),
-  name: z.string(),
-  type: z.number(),
-  icon_id: z.number().nullable(),
-  savedb: z.boolean(),
-  sortid: z.number(),
-  namemode: z.number(),
-  n_modifyp: z.number(),
-  n_member_addp: z.number(),
-  n_member_removep: z.number(),
+  name: z.string().optional(),
+  sgid: z.number().optional(),
+  id: z.number().optional(),
+  server_id: z.string().optional(),
+  group_id: z.number().optional(),
+  type: z.number().optional(),
+  icon_id: z.number().nullable().optional(),
+  savedb: z.boolean().optional(),
+  sortid: z.number().optional(),
+  namemode: z.number().optional(),
+  n_modifyp: z.number().optional(),
+  n_member_addp: z.number().optional(),
+  n_member_removep: z.number().optional(),
 });
 
 export const ZodUserTeamSpeakServerGroupInDB = z.object({
@@ -136,10 +144,11 @@ export const ZodUserTeamSpeakServerGroupInDB = z.object({
 });
 
 export const ZodDiscordRoleToTeamSpeakGroupMappingInDB = z.object({
-  id: z.number(),
-  discord_role_id: z.string(),
-  teamspeak_group_id: z.number(),
-  server_id: z.string(),
+  discord_role_id: z.string().optional(),
+  teamspeak_sgid: z.number().optional(),
+  id: z.number().optional(),
+  teamspeak_group_id: z.number().optional(),
+  server_id: z.string().optional(),
 });
 
 // Simplified type aliases

@@ -130,6 +130,17 @@ export default function MemberDetailsPage() {
     permission: 'edit_timeclock'
   });
 
+  // Get current user's information to check rank hierarchy and prevent self-editing
+  const { data: currentUserInfo } = api.dept.user.info.getDepartmentRoster.useQuery({
+    departmentId,
+    includeInactive: false,
+    memberIdFilter: undefined, // Get current user
+    limit: 1,
+  });
+
+  // Get current user's Discord ID to identify themselves
+  const { data: currentUser } = api.user.getMe.useQuery();
+
   // Get member's current week hours
   const { data: weeklyHours } = api.dept.user.timeclock.getWeeklyHours.useQuery({
     departmentId,
@@ -176,19 +187,71 @@ export default function MemberDetailsPage() {
     },
   });
 
-  // Note: These promotion/demotion endpoints may not exist yet. 
-  // For now, we'll create placeholder handlers
-  const handlePromote = (_toRankId: number, _reason?: string) => {
-    toast.info("Promotion functionality will be implemented");
+  const promoteMutation = api.dept.user.promotions.promote.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message || "Member promoted successfully");
+      void refetchMember();
+    },
+    onError: (error) => {
+      toast.error(`Failed to promote member: ${error.message}`);
+    },
+  });
+
+  const demoteMutation = api.dept.user.promotions.demote.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message || "Member demoted successfully");
+      void refetchMember();
+    },
+    onError: (error) => {
+      toast.error(`Failed to demote member: ${error.message}`);
+    },
+  });
+
+  const handlePromote = (toRankId: number, reason?: string) => {
+    if (!memberData) return;
+    
+    promoteMutation.mutate({
+      memberId: memberData.id,
+      toRankId,
+      reason: reason ?? "Promotion",
+      notes: reason ?? "Promotion via member management",
+    });
   };
 
-  const handleDemote = (_toRankId: number, _reason?: string) => {
-    toast.info("Demotion functionality will be implemented");
+  const handleDemote = (toRankId: number, reason?: string) => {
+    if (!memberData) return;
+    
+    demoteMutation.mutate({
+      memberId: memberData.id,
+      toRankId,
+      reason: reason ?? "Demotion",
+      notes: reason ?? "Demotion via member management",
+    });
   };
 
-  const handleDiscipline = (_action: 'warn' | 'suspend', _reason?: string) => {
-    toast.info("Discipline functionality will be implemented");
+  const handleDiscipline = (action: 'warn' | 'suspend', reason?: string) => {
+    if (!memberData) return;
+    
+    // For now, let's use the status update to handle warnings and suspensions
+    const statusMap = {
+      'warn': 'warned_1' as MemberStatus,
+      'suspend': 'suspended' as MemberStatus,
+    };
+    
+    updateMemberMutation.mutate({
+      id: memberId,
+      status: statusMap[action],
+      notes: `${memberData.notes ? memberData.notes + '\n\n' : ''}${action.toUpperCase()}: ${reason ?? 'No reason provided'} - ${new Date().toISOString()}`,
+    });
   };
+
+  // Simplified permissions - let backend handle authorization
+  const canEdit = permissions?.hasPermission;
+  const canPromote = promotePermission?.hasPermission;
+  const canDemote = demotePermission?.hasPermission;
+  const canDiscipline = disciplinePermission?.hasPermission;
+  const canViewTimeclock = (timeclockViewPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
+  const canEditTimeclock = (timeclockEditPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
 
   const getStatusColor = (status: MemberStatus) => {
     switch (status) {
@@ -315,12 +378,13 @@ export default function MemberDetailsPage() {
     );
   }
 
-  const canEdit = permissions?.hasPermission;
-  const canPromote = promotePermission?.hasPermission;
-  const canDemote = demotePermission?.hasPermission;
-  const canDiscipline = disciplinePermission?.hasPermission;
-  const canViewTimeclock = (timeclockViewPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
-  const canEditTimeclock = (timeclockEditPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
+  // Check if user is trying to edit themselves
+  const isEditingSelf = currentUser?.discordId === memberData?.discordId;
+  
+  // Get current user's rank information from the roster
+  const currentUserMember = currentUserInfo?.members?.find(m => m.discordId === currentUser?.discordId);
+  const currentUserRankLevel = currentUserMember?.rankLevel ?? 0;
+  const targetMemberRankLevel = memberData?.rankLevel ?? 0;
 
   return (
     <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -478,14 +542,14 @@ export default function MemberDetailsPage() {
                   <label className="text-sm font-medium">Rank</label>
                   {isEditing && (canPromote || canDemote) ? (
                     <Select
-                      value={editData.rankId?.toString() ?? ''}
-                      onValueChange={(value) => setEditData(prev => ({ ...prev, rankId: value ? parseInt(value) : undefined }))}
+                      value={editData.rankId?.toString() ?? '_none_'}
+                      onValueChange={(value) => setEditData(prev => ({ ...prev, rankId: value !== '_none_' ? parseInt(value) : undefined }))}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select rank" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">No Rank</SelectItem>
+                        <SelectItem value="_none_">No Rank</SelectItem>
                         {departmentInfo?.ranks?.map((rank) => (
                           <SelectItem key={rank.id} value={rank.id.toString()}>
                             {rank.name} (Level {rank.level})
@@ -512,14 +576,14 @@ export default function MemberDetailsPage() {
                   <label className="text-sm font-medium">Primary Team</label>
                   {isEditing ? (
                     <Select
-                      value={editData.primaryTeamId?.toString() ?? ''}
-                      onValueChange={(value) => setEditData(prev => ({ ...prev, primaryTeamId: value ? parseInt(value) : undefined }))}
+                      value={editData.primaryTeamId?.toString() ?? '_none_'}
+                      onValueChange={(value) => setEditData(prev => ({ ...prev, primaryTeamId: value !== '_none_' ? parseInt(value) : undefined }))}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select team" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">No Team</SelectItem>
+                        <SelectItem value="_none_">No Team</SelectItem>
                         {departmentInfo?.teams?.map((team) => (
                           <SelectItem key={team.id} value={team.id.toString()}>
                             {team.name}
@@ -909,25 +973,46 @@ export default function MemberDetailsPage() {
                     <Separator />
                     <div>
                       <h4 className="text-sm font-medium mb-3">Quick Actions</h4>
+                      
                       <div className="grid gap-2">
-                        {canPromote && memberData.rankId && (
+                        {canPromote && (
                           <Button
                             variant="outline"
                             size="sm"
                             className="justify-start"
+                            disabled={promoteMutation.isPending}
                             onClick={() => {
+                              if (!memberData.rankId) {
+                                // Member has no rank, promote to lowest rank
+                                const lowestRank = departmentInfo?.ranks
+                                  ?.sort((a, b) => a.level - b.level)[0]; // Get lowest level rank
+                                
+                                if (lowestRank) {
+                                  handlePromote(lowestRank.id, 'Initial rank assignment');
+                                } else {
+                                  toast.error("No ranks available in this department");
+                                }
+                                return;
+                              }
+
                               const currentRankLevel = memberData.rankLevel ?? 0;
-                              const higherRanks = departmentInfo?.ranks?.filter(rank => rank.level > currentRankLevel);
+                              // Sort ranks by level and find the next higher rank
+                              const higherRanks = departmentInfo?.ranks
+                                ?.filter(rank => rank.level > currentRankLevel)
+                                ?.sort((a, b) => a.level - b.level); // Sort ascending to get lowest higher rank first
+                              
                               if (higherRanks && higherRanks.length > 0) {
-                                const nextRank = higherRanks[higherRanks.length - 1]; // Lowest higher rank
+                                const nextRank = higherRanks[0]; // Get the next rank (lowest higher rank)
                                 if (nextRank) {
                                   handlePromote(nextRank.id, 'Quick promotion');
                                 }
+                              } else {
+                                toast.info("No higher rank available for promotion");
                               }
                             }}
                           >
                             <TrendingUp className="h-4 w-4 mr-2" />
-                            Promote
+                            {promoteMutation.isPending ? "Promoting..." : (memberData.rankId ? "Promote" : "Assign Rank")}
                           </Button>
                         )}
 
@@ -936,19 +1021,45 @@ export default function MemberDetailsPage() {
                             variant="outline"
                             size="sm"
                             className="justify-start"
+                            disabled={demoteMutation.isPending}
                             onClick={() => {
                               const currentRankLevel = memberData.rankLevel ?? 0;
-                              const lowerRanks = departmentInfo?.ranks?.filter(rank => rank.level < currentRankLevel);
+                              // Sort ranks by level and find the next lower rank
+                              const lowerRanks = departmentInfo?.ranks
+                                ?.filter(rank => rank.level < currentRankLevel)
+                                ?.sort((a, b) => b.level - a.level); // Sort descending to get highest lower rank first
+                              
                               if (lowerRanks && lowerRanks.length > 0) {
-                                const prevRank = lowerRanks[0]; // Highest lower rank
+                                const prevRank = lowerRanks[0]; // Get the previous rank (highest lower rank)
                                 if (prevRank) {
                                   handleDemote(prevRank.id, 'Quick demotion');
                                 }
+                              } else {
+                                toast.info("No lower rank available for demotion");
                               }
                             }}
                           >
                             <TrendingDown className="h-4 w-4 mr-2" />
-                            Demote
+                            {demoteMutation.isPending ? "Demoting..." : "Demote"}
+                          </Button>
+                        )}
+
+                        {canDemote && memberData.rankId && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="justify-start text-gray-600 hover:text-gray-700"
+                            disabled={updateMemberMutation.isPending}
+                            onClick={() => {
+                              updateMemberMutation.mutate({
+                                id: memberId,
+                                rankId: null,
+                              });
+                              toast.success("Rank removed from member");
+                            }}
+                          >
+                            <UserX className="h-4 w-4 mr-2" />
+                            Remove Rank
                           </Button>
                         )}
 
@@ -959,9 +1070,10 @@ export default function MemberDetailsPage() {
                               size="sm"
                               className="justify-start text-orange-600 hover:text-orange-700"
                               onClick={() => handleDiscipline('warn', 'Disciplinary action')}
+                              disabled={updateMemberMutation.isPending}
                             >
                               <AlertTriangle className="h-4 w-4 mr-2" />
-                              Issue Warning
+                              {updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
                             </Button>
 
                             <Button
@@ -969,9 +1081,10 @@ export default function MemberDetailsPage() {
                               size="sm"
                               className="justify-start text-red-600 hover:text-red-700"
                               onClick={() => handleDiscipline('suspend', 'Suspended pending review')}
+                              disabled={updateMemberMutation.isPending}
                             >
                               <Ban className="h-4 w-4 mr-2" />
-                              Suspend
+                              {updateMemberMutation.isPending ? "Processing..." : "Suspend"}
                             </Button>
                           </>
                         )}

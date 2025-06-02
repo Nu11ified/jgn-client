@@ -36,9 +36,9 @@ import {
 
 // Define the correct User type based on the actual API response
 interface AdminUser {
-  id: string;
+  id?: string;
   username: string;
-  discriminator: string;
+  discriminator?: string;
   avatar: string | null;
   bot?: boolean;
   system?: boolean;
@@ -54,11 +54,11 @@ interface AdminUser {
   avatar_decoration?: string | null;
   ts_uid?: string | null;
   // Admin-specific properties
-  is_admin: boolean;
-  is_moderator: boolean;
-  discord_id: string;
-  api_key: string;
-  last_synced: string;
+  is_admin?: boolean;
+  is_moderator?: boolean;
+  discord_id?: string;
+  api_key?: string;
+  last_synced?: string;
 }
 
 // Use AdminUser as our User type
@@ -107,11 +107,11 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
       filtered = filtered.filter(user => {
         switch (roleFilter) {
           case 'admin':
-            return user.is_admin;
+            return user.is_admin === true;
           case 'moderator':
-            return user.is_moderator;
+            return user.is_moderator === true;
           case 'user':
-            return !user.is_admin && !user.is_moderator;
+            return user.is_admin !== true && user.is_moderator !== true;
           default:
             return true;
         }
@@ -168,6 +168,11 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
   });
 
   const handleRoleUpdate = async (user: User, newRole: 'admin' | 'moderator' | 'user') => {
+    if (!user.discord_id) {
+      toast.error("Cannot update user: Discord ID missing");
+      return;
+    }
+    
     try {
       await updateUserMutation.mutateAsync({
         discord_id: user.discord_id,
@@ -277,7 +282,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
   // Modify the existing table row to add a role management button
   const renderTableRow = (user: User, virtualItem: VirtualItem) => (
     <TableRow 
-      key={user.discord_id + "-" + virtualItem.index} 
+      key={(user.discord_id ?? user.id ?? virtualItem.index) + "-" + virtualItem.index} 
       style={{
         position: 'absolute',
         top: `${virtualItem.start}px`,
@@ -300,51 +305,53 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
       >
         {user.username}
       </TableCell>
-      <TableCell style={{ width: '25%' }} className="truncate">{user.discord_id}</TableCell>
+      <TableCell style={{ width: '25%' }} className="truncate">{user.discord_id ?? 'N/A'}</TableCell>
       <TableCell style={{ width: '20%' }} className="truncate">{user.ts_uid ?? 'N/A'}</TableCell>
       <TableCell style={{ width: '15%' }}>
         <div className="flex items-center gap-2">
-          {user.is_admin && <Badge variant="destructive">Admin</Badge>}
-          {user.is_moderator && <Badge variant="secondary">Moderator</Badge>}
-          {!user.is_admin && !user.is_moderator && <Badge variant="outline">User</Badge>}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex items-center gap-2"
-              >
-                <UserCog className="h-4 w-4" />
-                Change
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem
-                onClick={() => handleRoleUpdate(user, 'admin')}
-                className={user.is_admin ? "bg-muted" : ""}
-              >
-                Admin
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => handleRoleUpdate(user, 'moderator')}
-                className={user.is_moderator ? "bg-muted" : ""}
-              >
-                Moderator
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => handleRoleUpdate(user, 'user')}
-                className={!user.is_admin && !user.is_moderator ? "bg-muted" : ""}
-              >
-                User
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {user.is_admin === true && <Badge variant="destructive">Admin</Badge>}
+          {user.is_moderator === true && <Badge variant="secondary">Moderator</Badge>}
+          {user.is_admin !== true && user.is_moderator !== true && <Badge variant="outline">User</Badge>}
+          {user.discord_id && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex items-center gap-2"
+                >
+                  <UserCog className="h-4 w-4" />
+                  Change
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem
+                  onClick={() => handleRoleUpdate(user, 'admin')}
+                  className={user.is_admin === true ? "bg-muted" : ""}
+                >
+                  Admin
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleRoleUpdate(user, 'moderator')}
+                  className={user.is_moderator === true ? "bg-muted" : ""}
+                >
+                  Moderator
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleRoleUpdate(user, 'user')}
+                  className={user.is_admin !== true && user.is_moderator !== true ? "bg-muted" : ""}
+                >
+                  User
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </TableCell>
       <TableCell style={{ width: '15%' }} className="truncate">
         {user.last_synced && !isNaN(Date.parse(user.last_synced))
           ? new Date(user.last_synced).toLocaleString()
-          : 'Invalid date'}
+          : 'N/A'}
       </TableCell>
     </TableRow>
   );

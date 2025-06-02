@@ -106,7 +106,7 @@ export default function BanHistoryClient({ initialBanHistory }: BanHistoryClient
     filteredData: filteredBanHistory, 
   } = useTableControls<BanEntry>({
     data: allFetchedBanHistory, 
-    searchKeys: ['user_id', 'server_id', 'banned_by', 'reason'],
+    searchKeys: ['user_discord_id', 'server_id', 'banned_by_user_id', 'reason'],
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -192,9 +192,9 @@ export default function BanHistoryClient({ initialBanHistory }: BanHistoryClient
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>User ID</TableHead>
+                <TableHead>Discord User ID</TableHead>
                 <TableHead>Server ID</TableHead>
-                <TableHead>Banned By</TableHead>
+                <TableHead>Banned By User ID</TableHead>
                 <TableHead>Reason</TableHead>
                 <TableHead>Banned At</TableHead>
               </TableRow>
@@ -212,9 +212,9 @@ export default function BanHistoryClient({ initialBanHistory }: BanHistoryClient
                 if (!entry) return null;
                 return (
                   <TableRow key={entry.id} style={{ height: `${virtualRow.size}px` }}>
-                    <TableCell>{entry.user_id}</TableCell>
-                    <TableCell>{entry.server_id}</TableCell>
-                    <TableCell>{entry.banned_by ?? "N/A"}</TableCell>
+                    <TableCell>{entry.user_discord_id ?? 'N/A'}</TableCell>
+                    <TableCell>{entry.server_id ?? 'N/A'}</TableCell>
+                    <TableCell>{entry.banned_by_user_id ?? "N/A"}</TableCell>
                     <TableCell>{entry.reason ?? "N/A"}</TableCell>
                     <TableCell>{entry.banned_at ? new Date(entry.banned_at).toLocaleString() : "N/A"}</TableCell>
                   </TableRow>

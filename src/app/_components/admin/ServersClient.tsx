@@ -30,13 +30,13 @@ const ESTIMATED_ROW_HEIGHT = 50;
 const PAGE_SIZE = 50; // Fetch 50 servers per API call, adjust if needed
 
 export default function ServersClient({ initialServers }: ServersClientProps) {
-  const [allFetchedServers, setAllFetchedServers] = useState<Server[]>(initialServers ?? []);
+  const [allFetchedServers, setAllFetchedServers] = useState<Server[]>(initialServers?.filter(server => server.server_id) ?? []);
   const [isFetchingAll, setIsFetchingAll] = useState(true);
   const [fetchingError, setFetchingError] = useState<string | null>(null);
-  const [totalServersLoaded, setTotalServersLoaded] = useState(initialServers?.length ?? 0);
+  const [totalServersLoaded, setTotalServersLoaded] = useState(initialServers?.filter(server => server.server_id)?.length ?? 0);
 
   const trpcUtils = api.useUtils();
-  const initialServersRef = useRef(initialServers);
+  const initialServersRef = useRef(initialServers?.filter(server => server.server_id));
 
   useEffect(() => {
     let active = true;
@@ -78,9 +78,9 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
           if (!active) break;
 
           if (nextPageServers && nextPageServers.length > 0) {
-            const validNextPageServers = nextPageServers.filter(Boolean);
+            const validNextPageServers = nextPageServers.filter(Boolean).filter(server => server.server_id);
             accumulatedServersInternal = [...accumulatedServersInternal, ...validNextPageServers];
-            setAllFetchedServers(prev => [...prev.filter(Boolean), ...validNextPageServers]); 
+            setAllFetchedServers(prev => [...prev.filter(Boolean).filter(server => server.server_id), ...validNextPageServers]); 
             currentPosition += validNextPageServers.length;
             setTotalServersLoaded(currentPosition); // For progress/display
             if (validNextPageServers.length < PAGE_SIZE) {
@@ -123,7 +123,7 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
     filteredData: filteredServers, 
   } = useTableControls<Server>({
     data: allFetchedServers, 
-    searchKeys: ['name', 'id'],
+    searchKeys: ['server_name', 'server_id'],
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -257,7 +257,7 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
 
                   return (
                     <TableRow 
-                      key={server.id + "-" + virtualItem.index} // id should be unique
+                      key={(server.server_id ?? `server-${virtualItem.index}`) + "-" + virtualItem.index} // id should be unique
                       style={{
                         position: 'absolute',
                         top: `${virtualItem.start}px`,
@@ -268,8 +268,8 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
                       }}
                       data-index={virtualItem.index}
                     >
-                      <TableCell style={{ width: '60%' }} className="font-medium truncate">{server.name}</TableCell>
-                      <TableCell style={{ width: '40%' }} className="truncate">{server.id}</TableCell>
+                      <TableCell style={{ width: '60%' }} className="font-medium truncate">{server.server_name ?? 'Unknown Server'}</TableCell>
+                      <TableCell style={{ width: '40%' }} className="truncate">{server.server_id ?? 'N/A'}</TableCell>
                     </TableRow>
                   );
                 })}

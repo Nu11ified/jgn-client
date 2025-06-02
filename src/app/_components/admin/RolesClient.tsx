@@ -30,13 +30,13 @@ const ESTIMATED_ROW_HEIGHT = 50;
 const PAGE_SIZE = 100;
 
 export default function RolesClient({ initialRoles }: RolesClientProps) {
-  const [allFetchedRoles, setAllFetchedRoles] = useState<Role[]>(initialRoles ?? []);
+  const [allFetchedRoles, setAllFetchedRoles] = useState<Role[]>(initialRoles?.filter(role => role.role_id) ?? []);
   const [isFetchingAll, setIsFetchingAll] = useState(true);
   const [fetchingError, setFetchingError] = useState<string | null>(null);
-  const [totalRolesLoaded, setTotalRolesLoaded] = useState(initialRoles?.length ?? 0);
+  const [totalRolesLoaded, setTotalRolesLoaded] = useState(initialRoles?.filter(role => role.role_id)?.length ?? 0);
 
   const trpcUtils = api.useUtils();
-  const initialRolesRef = useRef(initialRoles);
+  const initialRolesRef = useRef(initialRoles?.filter(role => role.role_id));
 
   useEffect(() => {
     let active = true;
@@ -65,9 +65,9 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
           const nextPageRoles = await trpcUtils.admin.roles.listRoles.fetch({ skip: currentPosition, limit: PAGE_SIZE });
           if (!active) break;
           if (nextPageRoles && nextPageRoles.length > 0) {
-            const validNextPageRoles = nextPageRoles.filter(Boolean);
+            const validNextPageRoles = nextPageRoles.filter(Boolean).filter(role => role.role_id);
             accumulatedRolesInternal = [...accumulatedRolesInternal, ...validNextPageRoles];
-            setAllFetchedRoles(prev => [...prev.filter(Boolean), ...validNextPageRoles]); 
+            setAllFetchedRoles(prev => [...prev.filter(Boolean).filter(role => role.role_id), ...validNextPageRoles]);
             currentPosition += validNextPageRoles.length;
             setTotalRolesLoaded(currentPosition);
             if (validNextPageRoles.length < PAGE_SIZE) {
@@ -106,7 +106,7 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
     filteredData: filteredRoles, 
   } = useTableControls<Role>({
     data: allFetchedRoles, 
-    searchKeys: ['name', 'id', 'server_id'],
+    searchKeys: ['role_name', 'role_id', 'server_id'],
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -223,13 +223,13 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
                 if (!role) return null;
                 return (
                   <TableRow 
-                    key={role.id}
+                    key={role.role_id ?? `role-${virtualRow.index}`}
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                   >
-                    <TableCell>{role.name}</TableCell>
-                    <TableCell>{role.id}</TableCell>
-                    <TableCell>{role.server_id}</TableCell>
+                    <TableCell>{role.role_name ?? 'Unknown Role'}</TableCell>
+                    <TableCell>{role.role_id ?? 'N/A'}</TableCell>
+                    <TableCell>{role.server_id ?? 'N/A'}</TableCell>
                   </TableRow>
                 );
               })}

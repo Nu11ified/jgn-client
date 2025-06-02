@@ -100,8 +100,8 @@ export default function RoleMappingsClient({
     const search = discordRoleSearch.trim().toLowerCase();
     if (!search || !discordRoles) return discordRoles ?? [];
     return discordRoles.filter(role =>
-      role.name.toLowerCase().includes(search) ||
-      role.id.toLowerCase().includes(search)
+      (role.role_name ?? '').toLowerCase().includes(search) ||
+      (role.role_id ?? '').toLowerCase().includes(search)
     );
   }, [discordRoles, discordRoleSearch]);
 
@@ -115,11 +115,11 @@ export default function RoleMappingsClient({
     if (!discordRoles) return [];
     const seenIds = new Set<string>();
     return discordRoles.filter(role => {
-      if (role?.id == null) return false;
-      if (seenIds.has(role.id)) {
+      if (role?.role_id == null) return false;
+      if (seenIds.has(role.role_id)) {
         return false;
       }
-      seenIds.add(role.id);
+      seenIds.add(role.role_id);
       return true;
     });
   }, [discordRoles]);
@@ -128,25 +128,25 @@ export default function RoleMappingsClient({
     if (!tsGroups) return [];
     const seenIds = new Set<number>();
     return tsGroups.filter((group: TsGroup) => {
-      if (group?.group_id == null) return false;
-      if (seenIds.has(group.group_id)) {
+      if (group?.sgid == null) return false;
+      if (seenIds.has(group.sgid)) {
         return false;
       }
-      seenIds.add(group.group_id);
+      seenIds.add(group.sgid);
       return true;
     });
   }, [tsGroups]);
 
   const discordRolesMap = useMemo(() => 
     discordRoles?.reduce((acc: Record<string, string>, role: DiscordRole) => {
-      if (role?.id && role.name) acc[role.id] = role.name;
+      if (role?.role_id && role.role_name) acc[role.role_id] = role.role_name;
       return acc;
     }, {} as Record<string, string>) ?? {}
   , [discordRoles]);
 
   const tsGroupsMap = useMemo(() =>
     tsGroups?.reduce((acc: Record<number, string>, group: TsGroup) => {
-      if (group?.group_id && group.name) acc[group.group_id] = group.name;
+      if (group?.sgid && group.name) acc[group.sgid] = group.name;
       return acc;
     }, {} as Record<number, string>) ?? {}
   , [tsGroups]);
@@ -199,8 +199,8 @@ export default function RoleMappingsClient({
   const handleDialogOpen = (mapping?: RoleMapping | null) => {
     if (mapping) {
       setEditingMapping(mapping);
-      setValue("discord_role_id", String(mapping.discord_role_id));
-      setValue("teamspeak_group_id", String(mapping.teamspeak_group_id));
+      setValue("discord_role_id", String(mapping.discord_role_id ?? ''));
+      setValue("teamspeak_group_id", String(mapping.teamspeak_sgid ?? ''));
     } else {
       setEditingMapping(null);
       reset({ discord_role_id: '', teamspeak_group_id: '' });
@@ -213,7 +213,7 @@ export default function RoleMappingsClient({
       discord_role_id: data.discord_role_id,
       teamspeak_sgid: Number(data.teamspeak_group_id),
     };
-    if (editingMapping) {
+    if (editingMapping?.discord_role_id) {
       updateMutation.mutate({
         discord_role_id: editingMapping.discord_role_id, 
         teamspeak_sgid: Number(data.teamspeak_group_id), 
@@ -307,8 +307,8 @@ export default function RoleMappingsClient({
                             <div className="px-4 py-2 text-muted-foreground">No roles found.</div>
                           )}
                           {filteredDiscordRoles.map((role: DiscordRole) => (
-                            <SelectItem key={role.id} value={role.id}>
-                              {role.name} (ID: {role.id})
+                            <SelectItem key={role.role_id ?? `role-${Math.random()}`} value={role.role_id ?? ''}>
+                              {role.role_name ?? 'Unknown Role'} (ID: {role.role_id ?? 'N/A'})
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -329,8 +329,8 @@ export default function RoleMappingsClient({
                         </SelectTrigger>
                         <SelectContent>
                           {uniqueTsGroups?.map((group: TsGroup) => (
-                            <SelectItem key={group.group_id} value={String(group.group_id)}>
-                              {group.name} (SGID: {group.group_id})
+                            <SelectItem key={group.sgid ?? `group-${Math.random()}`} value={String(group.sgid ?? '')}>
+                              {group.name ?? 'Unknown Group'} (SGID: {group.sgid ?? 'N/A'})
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -364,23 +364,25 @@ export default function RoleMappingsClient({
               </TableHeader>
               <TableBody>
                 {roleMappings.map((mapping) => (
-                  mapping && <TableRow key={mapping.discord_role_id}>
-                    <TableCell>{discordRolesMap[mapping.discord_role_id] ?? mapping.discord_role_id}</TableCell>
-                    <TableCell>{tsGroupsMap[mapping.teamspeak_group_id] ?? mapping.teamspeak_group_id}</TableCell>
-                    <TableCell className="text-right space-x-2">
-                      <Button variant="outline" size="icon" onClick={() => handleDialogOpen(mapping)} disabled={deleteMutation.isPending || updateMutation.isPending || createMutation.isPending}>
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button 
-                        variant="destructive" 
-                        size="icon" 
-                        onClick={() => deleteMutation.mutate({ discord_role_id: mapping.discord_role_id })} 
-                        disabled={deleteMutation.isPending}
-                      >
-                        {(deleteMutation.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+                  mapping?.discord_role_id && mapping.teamspeak_sgid && (
+                    <TableRow key={mapping.discord_role_id}>
+                      <TableCell>{discordRolesMap[mapping.discord_role_id] ?? mapping.discord_role_id}</TableCell>
+                      <TableCell>{tsGroupsMap[mapping.teamspeak_sgid] ?? mapping.teamspeak_sgid}</TableCell>
+                      <TableCell className="text-right space-x-2">
+                        <Button variant="outline" size="icon" onClick={() => handleDialogOpen(mapping)} disabled={deleteMutation.isPending || updateMutation.isPending || createMutation.isPending}>
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button 
+                          variant="destructive" 
+                          size="icon" 
+                          onClick={() => deleteMutation.mutate({ discord_role_id: mapping.discord_role_id! })} 
+                          disabled={deleteMutation.isPending}
+                        >
+                          {(deleteMutation.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
                 ))}
               </TableBody>
             </Table>

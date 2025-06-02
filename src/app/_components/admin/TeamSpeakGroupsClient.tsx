@@ -30,13 +30,13 @@ const ESTIMATED_ROW_HEIGHT = 50;
 const PAGE_SIZE = 100;
 
 export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroupsClientProps) {
-  const [allFetchedGroups, setAllFetchedGroups] = useState<TsGroup[]>(initialGroups ?? []);
+  const [allFetchedGroups, setAllFetchedGroups] = useState<TsGroup[]>(initialGroups?.filter(group => group.sgid !== undefined) ?? []);
   const [isFetchingAll, setIsFetchingAll] = useState(true);
   const [fetchingError, setFetchingError] = useState<string | null>(null);
-  const [totalGroupsLoaded, setTotalGroupsLoaded] = useState(initialGroups?.length ?? 0);
+  const [totalGroupsLoaded, setTotalGroupsLoaded] = useState(initialGroups?.filter(group => group.sgid !== undefined)?.length ?? 0);
 
   const trpcUtils = api.useUtils();
-  const initialGroupsRef = useRef(initialGroups);
+  const initialGroupsRef = useRef(initialGroups?.filter(group => group.sgid !== undefined));
 
   useEffect(() => {
     let active = true;
@@ -65,9 +65,9 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
           const nextPageGroups = await trpcUtils.admin.teamSpeakGroups.listTsGroups.fetch({ skip: currentPosition, limit: PAGE_SIZE });
           if (!active) break;
           if (nextPageGroups && nextPageGroups.length > 0) {
-            const validNextPageGroups = nextPageGroups.filter(Boolean);
+            const validNextPageGroups = nextPageGroups.filter(Boolean).filter(group => group.sgid !== undefined);
             accumulatedGroupsInternal = [...accumulatedGroupsInternal, ...validNextPageGroups];
-            setAllFetchedGroups(prev => [...prev.filter(Boolean), ...validNextPageGroups]); 
+            setAllFetchedGroups(prev => [...prev.filter(Boolean).filter(group => group.sgid !== undefined), ...validNextPageGroups]);
             currentPosition += validNextPageGroups.length;
             setTotalGroupsLoaded(currentPosition);
             if (validNextPageGroups.length < PAGE_SIZE) {
@@ -106,7 +106,7 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
     filteredData: filteredGroups, 
   } = useTableControls<TsGroup>({
     data: allFetchedGroups, 
-    searchKeys: ['name', 'group_id'],
+    searchKeys: ['name', 'sgid'],
   });
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -222,12 +222,12 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
                 if (!group) return null;
                 return (
                   <TableRow 
-                    key={group.group_id}
+                    key={group.sgid ?? `group-${virtualRow.index}`}
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                   >
-                    <TableCell>{group.name}</TableCell>
-                    <TableCell>{group.group_id}</TableCell>
+                    <TableCell>{group.name ?? 'Unknown Group'}</TableCell>
+                    <TableCell>{group.sgid ?? 'N/A'}</TableCell>
                   </TableRow>
                 );
               })}

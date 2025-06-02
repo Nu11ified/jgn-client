@@ -471,16 +471,16 @@ export default function TrainingManagementPage() {
                           <div>
                             <Label htmlFor="teamId">Team (Optional)</Label>
                             <Select 
-                              value={meetingForm.watch("teamId")?.toString() ?? ""} 
+                              value={meetingForm.watch("teamId")?.toString() ?? "all"} 
                               onValueChange={(value) => 
-                                meetingForm.setValue("teamId", value ? parseInt(value) : undefined)
+                                meetingForm.setValue("teamId", value !== "all" ? parseInt(value) : undefined)
                               }
                             >
                               <SelectTrigger>
                                 <SelectValue placeholder="All department (no team)" />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="">All department</SelectItem>
+                                <SelectItem value="all">All department</SelectItem>
                                 {teams?.map((team) => (
                                   <SelectItem key={team.id} value={team.id.toString()}>
                                     {team.name}
@@ -493,16 +493,16 @@ export default function TrainingManagementPage() {
                           <div>
                             <Label htmlFor="requiredRankLevel">Minimum Rank Level</Label>
                             <Select 
-                              value={meetingForm.watch("requiredRankLevel")?.toString() ?? ""} 
+                              value={meetingForm.watch("requiredRankLevel")?.toString() ?? "all"} 
                               onValueChange={(value) => 
-                                meetingForm.setValue("requiredRankLevel", value ? parseInt(value) : undefined)
+                                meetingForm.setValue("requiredRankLevel", value !== "all" ? parseInt(value) : undefined)
                               }
                             >
                               <SelectTrigger>
                                 <SelectValue placeholder="All ranks" />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="">All ranks</SelectItem>
+                                <SelectItem value="all">All ranks</SelectItem>
                                 {ranks?.map((rank) => (
                                   <SelectItem key={rank.id} value={rank.level.toString()}>
                                     Level {rank.level}+ ({rank.name})

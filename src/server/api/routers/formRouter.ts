@@ -46,7 +46,7 @@ function hasRequiredRole(allUserRoles: string[], requiredRolesForForm: ReadonlyA
 }
 
 // Helper function to map user IDs to user details consistently across all functions
-// Note: formResponses.userId contains Discord IDs as strings, not JWT sub IDs
+// Note: formResponses.userId can contain either AUTH USER IDs or Discord IDs (mixed data)
 async function mapUserIdsToDetails(userIds: Set<string>): Promise<Map<string, { fullName?: string | null; discordId?: string | null }>> {
   const finalUserDetailsMap = new Map<string, { fullName?: string | null; discordId?: string | null }>();
 
@@ -55,77 +55,150 @@ async function mapUserIdsToDetails(userIds: Set<string>): Promise<Map<string, { 
   }
 
   try {
-    console.log(`[mapUserIdsToDetails] Looking up ${userIds.size} Discord IDs:`, Array.from(userIds).slice(0, 3));
+    // Separate auth user IDs from Discord IDs based on format
+    const authUserIds = new Set<string>();
+    const discordIds = new Set<string>();
+    
+    userIds.forEach(id => {
+      // Discord IDs are typically 17-19 digit numbers
+      if (/^\d{17,19}$/.test(id)) {
+        discordIds.add(id);
+      } else {
+        // Auth user IDs are typically alphanumeric strings like 'JsU980cUQWhiYSW4HFU3LhObQx4JTJCB'
+        authUserIds.add(id);
+      }
+    });
 
-    // Convert string Discord IDs to BigInt for database lookup
-    const discordIdsToFetch = Array.from(userIds)
-      .map(id => {
-        try {
-          return { original: id, bigint: BigInt(id) };
-        } catch {
-          console.warn(`[mapUserIdsToDetails] Invalid Discord ID format: ${id}`);
-          return null;
-        }
-      })
-      .filter((item): item is { original: string; bigint: bigint } => item !== null);
-
-    console.log(`[mapUserIdsToDetails] Valid Discord IDs to fetch: ${discordIdsToFetch.length}`);
-
-    if (discordIdsToFetch.length > 0) {
-      // Look up usernames directly in the users table using Discord IDs
-      const userSchemaDetails = await db
-        .select({
-          discordId: users.discordId, // bigint
-          username: users.username, // string
+    // Handle Discord IDs directly
+    if (discordIds.size > 0) {
+      const discordIdsToFetch = Array.from(discordIds)
+        .map(id => {
+          try {
+            return { original: id, bigint: BigInt(id) };
+          } catch {
+            console.warn(`[mapUserIdsToDetails] Invalid Discord ID format: ${id}`);
+            return null;
+          }
         })
-        .from(users)
-        .where(inArray(users.discordId, discordIdsToFetch.map(item => item.bigint)))
+        .filter((item): item is { original: string; bigint: bigint } => item !== null);
+
+      if (discordIdsToFetch.length > 0) {
+        const userSchemaDetails = await db
+          .select({
+            discordId: users.discordId, // bigint
+            username: users.username, // string
+          })
+          .from(users)
+          .where(inArray(users.discordId, discordIdsToFetch.map(item => item.bigint)))
+          .execute();
+
+        // Map Discord IDs directly to usernames
+        userSchemaDetails.forEach(ud => {
+          if (ud.username) {
+            const discordIdStr = String(ud.discordId);
+            finalUserDetailsMap.set(discordIdStr, {
+              fullName: ud.username,
+              discordId: discordIdStr,
+            });
+          }
+        });
+
+        // Set fallback for Discord IDs not found in users table
+        discordIds.forEach(discordId => {
+          if (!finalUserDetailsMap.has(discordId)) {
+            finalUserDetailsMap.set(discordId, {
+              fullName: null,
+              discordId: discordId,
+            });
+          }
+        });
+      }
+    }
+
+    // Handle auth user IDs (need to look up Discord IDs first)
+    if (authUserIds.size > 0) {
+      const accountInfos = await db
+        .select({
+          userId: authAccount.userId, // This is the auth user ID
+          discordAccountId: authAccount.accountId, // This is the Discord ID (string)
+        })
+        .from(authAccount)
+        .where(inArray(authAccount.userId, Array.from(authUserIds)))
         .execute();
 
-      console.log(`[mapUserIdsToDetails] Found ${userSchemaDetails.length} user records`);
-
-      // Create mapping from Discord ID string to username
-      const discordIdToUsernameMap = new Map<string, string>();
-      userSchemaDetails.forEach(ud => {
-        if (ud.username) {
-          discordIdToUsernameMap.set(String(ud.discordId), ud.username);
+      // Create mapping from auth user ID to Discord ID
+      const authUserToDiscordIdMap = new Map<string, string>();
+      accountInfos.forEach(acc => {
+        if (acc.discordAccountId) {
+          authUserToDiscordIdMap.set(acc.userId, acc.discordAccountId);
         }
       });
 
-      // Populate the final map for all requested Discord IDs
-      userIds.forEach(discordIdStr => {
-        const username = discordIdToUsernameMap.get(discordIdStr);
-        finalUserDetailsMap.set(discordIdStr, {
-          fullName: username ?? null,
-          discordId: discordIdStr, // The Discord ID is the original ID we were given
-        });
-        
-        if (username) {
-          console.log(`[mapUserIdsToDetails] Mapped ${discordIdStr} -> ${username}`);
-        } else {
-          console.warn(`[mapUserIdsToDetails] No username found for Discord ID: ${discordIdStr}`);
+      // Get usernames for the Discord IDs found from auth accounts
+      if (authUserToDiscordIdMap.size > 0) {
+        const discordIdStrings = Array.from(authUserToDiscordIdMap.values());
+        const discordIdsToFetch = discordIdStrings
+          .map(id => {
+            try {
+              return { original: id, bigint: BigInt(id) };
+            } catch {
+              console.warn(`[mapUserIdsToDetails] Invalid Discord ID format from auth: ${id}`);
+              return null;
+            }
+          })
+          .filter((item): item is { original: string; bigint: bigint } => item !== null);
+
+        if (discordIdsToFetch.length > 0) {
+          const userSchemaDetails = await db
+            .select({
+              discordId: users.discordId, // bigint
+              username: users.username, // string
+            })
+            .from(users)
+            .where(inArray(users.discordId, discordIdsToFetch.map(item => item.bigint)))
+            .execute();
+
+          // Create mapping from Discord ID string to username
+          const discordIdToUsernameMap = new Map<string, string>();
+          userSchemaDetails.forEach(ud => {
+            if (ud.username) {
+              discordIdToUsernameMap.set(String(ud.discordId), ud.username);
+            }
+          });
+
+          // Populate the final map for auth user IDs
+          authUserIds.forEach(authUserId => {
+            const discordIdStr = authUserToDiscordIdMap.get(authUserId);
+            const username = discordIdStr ? discordIdToUsernameMap.get(discordIdStr) : null;
+            
+            finalUserDetailsMap.set(authUserId, {
+              fullName: username ?? null,
+              discordId: discordIdStr ?? null,
+            });
+          });
         }
-      });
-    } else {
-      // Handle case where no valid Discord IDs were provided
-      userIds.forEach(userId => {
-        finalUserDetailsMap.set(userId, {
-          fullName: null,
-          discordId: userId,
-        });
+      }
+
+      // Set fallback for auth user IDs not found
+      authUserIds.forEach(authUserId => {
+        if (!finalUserDetailsMap.has(authUserId)) {
+          finalUserDetailsMap.set(authUserId, {
+            fullName: null,
+            discordId: null,
+          });
+        }
       });
     }
 
-    console.log(`[mapUserIdsToDetails] Final mapping contains ${finalUserDetailsMap.size} entries`);
     return finalUserDetailsMap;
 
   } catch (error) {
-    console.error('[mapUserIdsToDetails] Error mapping Discord IDs to details:', error);
+    console.error('[mapUserIdsToDetails] Error mapping user IDs to details:', error);
     // Provide fallback empty mappings for all requested user IDs
     userIds.forEach(userId => {
       finalUserDetailsMap.set(userId, {
         fullName: null,
-        discordId: userId,
+        discordId: /^\d{17,19}$/.test(userId) ? userId : null,
       });
     });
     return finalUserDetailsMap;
@@ -633,7 +706,7 @@ export const formRouter = createTRPCRouter({
         .from(formResponses)
         .where(and(
           eq(formResponses.formId, input.formId),
-          eq(formResponses.userId, String(ctx.dbUser.discordId)),
+          eq(formResponses.userId, ctx.session.user.id),
           eq(formResponses.status, formResponseStatusEnum.enum.draft)
         ))
         .limit(1).execute();
@@ -658,7 +731,7 @@ export const formRouter = createTRPCRouter({
         // Create a new response
         const [newResponse] = await postgrestDb
           .insert(formResponses)
-          .values({ formId: input.formId, userId: String(ctx.dbUser.discordId), answers: input.answers, status: initialStatus, submittedAt: new Date() })
+          .values({ formId: input.formId, userId: ctx.session.user.id, answers: input.answers, status: initialStatus, submittedAt: new Date() })
           .returning().execute();
         if (!newResponse) {
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to submit form response." });
@@ -716,7 +789,7 @@ export const formRouter = createTRPCRouter({
       }
       
       const existingReview = responseToReview.reviewerDecisions?.find(
-        (d: ReviewerDecisionObject) => d.userId === String(ctx.dbUser.discordId)
+        (d: ReviewerDecisionObject) => d.userId === ctx.session.user.id
       );
       if (existingReview) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "You have already reviewed this response." });
@@ -724,7 +797,7 @@ export const formRouter = createTRPCRouter({
 
       const newDecision: ReviewerDecisionObject = {
         reviewerName: ctx.session.user.name,
-        userId: String(ctx.dbUser.discordId),
+        userId: ctx.session.user.id,
         decision: input.decision,
         reviewedAt: new Date(),
         comments: input.comments,
@@ -733,7 +806,7 @@ export const formRouter = createTRPCRouter({
       const updatedDecisions = [...(responseToReview.reviewerDecisions ?? []), newDecision];
       
       // Add the current reviewer's ID to the reviewerIds array if not already present
-      const currentReviewerId = String(ctx.dbUser.discordId);
+      const currentReviewerId = ctx.session.user.id;
       const updatedReviewerIds = Array.from(new Set([...(responseToReview.reviewerIds ?? []), currentReviewerId]));
 
       let newApprovedCount = responseToReview.reviewersApprovedCount;
@@ -833,7 +906,7 @@ export const formRouter = createTRPCRouter({
 
       const result = await postgrestDb
         .update(formResponses)
-        .set({ finalApproverId: String(ctx.dbUser.discordId), finalApprovalDecision: input.decision, finalApprovedAt: new Date(), finalApprovalComments: input.comments, status: newStatus, updatedAt: new Date() })
+        .set({ finalApproverId: ctx.session.user.id, finalApprovalDecision: input.decision, finalApprovedAt: new Date(), finalApprovalComments: input.comments, status: newStatus, updatedAt: new Date() })
         .where(eq(formResponses.id, input.responseId))
         .returning().execute();
       const updatedResponse = result[0];
@@ -1023,7 +1096,7 @@ export const formRouter = createTRPCRouter({
       }
 
       let canView = false;
-      if (response.userId === String(ctx.dbUser.discordId)) {
+      if (response.userId === ctx.session.user.id) {
         canView = true;
       } else {
         if (!ctx.dbUser?.discordId) {
@@ -1089,7 +1162,9 @@ export const formRouter = createTRPCRouter({
       cursor: z.string().optional(), // submittedAt timestamp
     }))
     .query(async ({ ctx, input }) => {
-      const userId = String(ctx.dbUser.discordId);
+      // Use auth user ID, not Discord ID - form responses store auth user IDs
+      const userId = ctx.session.user.id;
+      
       const whereClauses = [eq(formResponses.userId, userId)];
 
       if (input.cursor) {
@@ -1178,7 +1253,7 @@ export const formRouter = createTRPCRouter({
         drizzleSql`NOT (EXISTS (
           SELECT 1
           FROM jsonb_array_elements(${formResponses.reviewerDecisions}) AS decision
-          WHERE (decision->>'userId')::text = ${String(ctx.dbUser.discordId)}
+          WHERE (decision->>'userId')::text = ${ctx.session.user.id}
         ))`
       ];
 
@@ -1346,7 +1421,7 @@ export const formRouter = createTRPCRouter({
       responseId: z.number().int().optional(), // If updating an existing draft
     }))
     .mutation(async ({ ctx, input }): Promise<PgFormResponse> => {
-      const userId = String(ctx.dbUser.discordId);
+      const userId = ctx.session.user.id;
 
       // Check if form exists and is not deleted
       const [targetForm] = await postgrestDb.select({ id: forms.id, accessRoleIds: forms.accessRoleIds })
@@ -1419,7 +1494,7 @@ export const formRouter = createTRPCRouter({
   getUserDraft: protectedProcedure
     .input(z.object({ formId: z.number().int() }))
     .query(async ({ ctx, input }) => {
-      const userId = String(ctx.dbUser.discordId);
+      const userId = ctx.session.user.id;
       // Use findFirst with correct type from relations if possible, or select specific fields
       const draft = await postgrestDb.query.formResponses.findFirst({
         where: and(

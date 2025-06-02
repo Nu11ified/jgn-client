@@ -341,17 +341,13 @@ const updateUserRankFromDiscordRoles = async (discordId: string, departmentId?: 
       if (M2M_API_KEY) {
         console.log("🔍 Fetching user Discord roles from API...");
         const rolesResponse = await axios.get(
-          `${API_BASE_URL}/admin/user_server_roles/`,
+          `${API_BASE_URL}/admin/user_server_roles/users/${discordId}/roles`,
           {
-            params: { 
-              user_discord_id: discordId,
-              limit: 10000 // Set high limit to fetch all user roles
-            },
             headers: { "X-API-Key": M2M_API_KEY },
           }
         );
         // Map the API response fields to our expected format
-        const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; }> ?? [];
+        const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; role_name: string; }> ?? [];
         userRoles = rawRoles.map(role => ({ 
           roleId: role.role_id, 
           serverId: role.server_id 
@@ -734,17 +730,13 @@ const updateUserTeamFromDiscordRoles = async (discordId: string, departmentId?: 
       if (M2M_API_KEY) {
         console.log("🔍 Fetching user Discord roles from API...");
         const rolesResponse = await axios.get(
-          `${API_BASE_URL}/admin/user_server_roles/`,
+          `${API_BASE_URL}/admin/user_server_roles/users/${discordId}/roles`,
           {
-            params: { 
-              user_discord_id: discordId,
-              limit: 10000 // Set high limit to fetch all user roles
-            },
             headers: { "X-API-Key": M2M_API_KEY },
           }
         );
         // Map the API response fields to our expected format
-        const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; }> ?? [];
+        const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; role_name: string; }> ?? [];
         userRoles = rawRoles.map(role => ({ 
           roleId: role.role_id, 
           serverId: role.server_id 

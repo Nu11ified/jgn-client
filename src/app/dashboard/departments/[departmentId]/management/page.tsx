@@ -52,6 +52,7 @@ import {
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { formatLocalDateTime, formatLocalDate, formatDuration, localToUTC, utcToLocal, getCurrentLocalDateTime } from "@/lib/utils/date";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
 
@@ -177,10 +178,11 @@ export default function TrainingManagementPage() {
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
 
   const handleCreateMeeting = (data: CreateMeetingFormData) => {
+    // Convert local datetime to UTC before sending to server
     createMeetingMutation.mutate({
       ...data,
       departmentId,
-      scheduledAt: new Date(data.scheduledAt),
+      scheduledAt: new Date(localToUTC(data.scheduledAt)),
     });
   };
 
@@ -430,8 +432,11 @@ export default function TrainingManagementPage() {
                               id="scheduledAt"
                               type="datetime-local"
                               {...meetingForm.register("scheduledAt")}
-                              min={new Date().toISOString().slice(0, 16)}
+                              min={getCurrentLocalDateTime()}
                             />
+                            <p className="text-sm text-muted-foreground mt-1">
+                              Times are shown in your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone})
+                            </p>
                             {meetingForm.formState.errors.scheduledAt && (
                               <p className="text-sm text-destructive mt-1">
                                 {meetingForm.formState.errors.scheduledAt.message}
@@ -585,7 +590,7 @@ export default function TrainingManagementPage() {
                         <div className="flex items-center gap-4">
                           <div className="flex items-center gap-1">
                             <Calendar className="h-4 w-4" />
-                            <span>{formatDateTime(meeting.scheduledAt)}</span>
+                            <span>{formatLocalDateTime(meeting.scheduledAt)}</span>
                           </div>
                           <div className="flex items-center gap-1">
                             <Clock className="h-4 w-4" />
@@ -730,7 +735,7 @@ export default function TrainingManagementPage() {
                             <div className="text-sm text-muted-foreground space-y-1">
                               <p>Discord: {member.discordId}</p>
                               <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
-                              <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
+                              <p>Hired: {member.hireDate ? formatLocalDate(member.hireDate) : 'Unknown'}</p>
                               {member.notes && (
                                 <p>Notes: {member.notes}</p>
                               )}
@@ -816,8 +821,8 @@ export default function TrainingManagementPage() {
                             <div className="text-sm text-muted-foreground space-y-1">
                               <p>Discord: {member.discordId}</p>
                               <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
-                              <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
-                              <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
+                              <p>Hired: {member.hireDate ? formatLocalDate(member.hireDate) : 'Unknown'}</p>
+                              <p>Last Active: {member.lastActiveDate ? formatLocalDate(member.lastActiveDate) : 'Unknown'}</p>
                               {member.notes && (
                                 <p>Notes: {member.notes}</p>
                               )}
@@ -910,8 +915,8 @@ export default function TrainingManagementPage() {
                               <div className="text-sm text-muted-foreground space-y-1">
                                 <p>Discord: {member.discordId}</p>
                                 <p>Callsign: {member.callsign ?? 'Not assigned'}</p>
-                                <p>Hired: {member.hireDate ? formatDate(member.hireDate) : 'Unknown'}</p>
-                                <p>Last Active: {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'Unknown'}</p>
+                                <p>Hired: {member.hireDate ? formatLocalDate(member.hireDate) : 'Unknown'}</p>
+                                <p>Last Active: {member.lastActiveDate ? formatLocalDate(member.lastActiveDate) : 'Unknown'}</p>
                               </div>
                             </div>
                           </div>

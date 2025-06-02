@@ -50,6 +50,7 @@ import {
   DialogHeader, 
   DialogTitle 
 } from "@/components/ui/dialog";
+import { formatLocalDateTime, formatLocalDate, formatDuration } from "@/lib/utils/date";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
 
@@ -420,30 +421,6 @@ export default function MemberDetailsPage() {
     ).join(' ');
   };
 
-  const formatDate = (date: Date | string) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const formatDateTime = (date: Date | string) => {
-    return new Date(date).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const formatDuration = (minutes: number) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
-  };
-
   const getDaysInDepartment = (hireDate: Date | string | null) => {
     if (!hireDate) return 0;
     const now = new Date();
@@ -744,7 +721,7 @@ export default function MemberDetailsPage() {
                   <div>
                     <p className="text-sm font-medium">Hire Date</p>
                     <p className="text-sm text-muted-foreground">
-                      {memberData.hireDate ? formatDate(memberData.hireDate) : 'Not set'}
+                      {memberData.hireDate ? formatLocalDate(memberData.hireDate) : 'Not set'}
                     </p>
                   </div>
                 </div>
@@ -754,7 +731,7 @@ export default function MemberDetailsPage() {
                   <div>
                     <p className="text-sm font-medium">Last Active</p>
                     <p className="text-sm text-muted-foreground">
-                      {memberData.lastActiveDate ? formatDate(memberData.lastActiveDate) : 'Unknown'}
+                      {memberData.lastActiveDate ? formatLocalDate(memberData.lastActiveDate) : 'Unknown'}
                     </p>
                   </div>
                 </div>
@@ -819,10 +796,10 @@ export default function MemberDetailsPage() {
                           <div key={entry.id} className="flex items-center justify-between p-2 rounded border">
                             <div>
                               <p className="text-sm font-medium">
-                                {formatDate(entry.clockInTime)}
+                                {formatLocalDate(entry.clockInTime)}
                               </p>
                               <p className="text-xs text-muted-foreground">
-                                {formatDateTime(entry.clockInTime)} - {entry.clockOutTime ? formatDateTime(entry.clockOutTime) : 'Active'}
+                                {formatLocalDateTime(entry.clockInTime)} - {entry.clockOutTime ? formatLocalDateTime(entry.clockOutTime) : 'Active'}
                               </p>
                             </div>
                             <div className="text-right">
@@ -898,7 +875,7 @@ export default function MemberDetailsPage() {
                           {getDaysInDepartment(memberData?.hireDate ?? null)}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          Since {memberData?.hireDate ? formatDate(memberData.hireDate) : 'N/A'}
+                          Since {memberData?.hireDate ? formatLocalDate(memberData.hireDate) : 'N/A'}
                         </p>
                       </div>
                     </div>
@@ -956,7 +933,7 @@ export default function MemberDetailsPage() {
                               <div className="flex justify-between">
                                 <span className="text-muted-foreground">Hire Date:</span>
                                 <span className="font-medium">
-                                  {memberData?.hireDate ? formatDate(memberData.hireDate) : 'N/A'}
+                                  {memberData?.hireDate ? formatLocalDate(memberData.hireDate) : 'N/A'}
                                 </span>
                               </div>
                               <div className="flex justify-between">
@@ -998,7 +975,7 @@ export default function MemberDetailsPage() {
                                     Promotion Record #{promotion.id}
                                   </div>
                                   <div className="text-sm text-muted-foreground">
-                                    {formatDateTime(promotion.effectiveDate)} • By {promotion.promotedBy}
+                                    {formatLocalDateTime(promotion.effectiveDate)} • By {promotion.promotedBy}
                                   </div>
                                   {promotion.reason && (
                                     <div className="text-sm text-muted-foreground mt-1">
@@ -1049,7 +1026,7 @@ export default function MemberDetailsPage() {
                                       </Badge>
                                     </div>
                                     <div className="text-sm text-muted-foreground">
-                                      {formatDateTime(action.issuedAt)} • By {action.issuedBy}
+                                      {formatLocalDateTime(action.issuedAt)} • By {action.issuedBy}
                                     </div>
                                     <div className="text-sm mt-2">
                                       <strong>Reason:</strong> {action.reason}
@@ -1061,7 +1038,7 @@ export default function MemberDetailsPage() {
                                     )}
                                     {action.expiresAt && (
                                       <div className="text-xs text-muted-foreground mt-2">
-                                        Expires: {formatDateTime(action.expiresAt)}
+                                        Expires: {formatLocalDateTime(action.expiresAt)}
                                       </div>
                                     )}
                                   </div>

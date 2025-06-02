@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { toast } from "sonner";
+import { formatLocalDateTime, formatLocalDate, formatDuration, utcToLocal } from "@/lib/utils/date";
 
 type TimeEntry = {
   id: number;
@@ -149,36 +150,12 @@ export default function MemberTimeHistoryPage() {
   const canEdit = (editPermission?.hasPermission ?? false) || (managePermission?.hasPermission ?? false);
   const canView = (viewPermission?.hasPermission ?? false) || (managePermission?.hasPermission ?? false);
 
-  const formatDateTime = (date: Date | string) => {
-    return new Date(date).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const formatDate = (date: Date | string) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const formatDuration = (minutes: number) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
-  };
-
   const openEditDialog = (entry: TimeEntry) => {
     setEditEntry({
       isOpen: true,
       entryId: entry.id,
-      clockInTime: new Date(entry.clockInTime).toISOString().slice(0, 16),
-      clockOutTime: entry.clockOutTime ? new Date(entry.clockOutTime).toISOString().slice(0, 16) : '',
+      clockInTime: utcToLocal(entry.clockInTime),
+      clockOutTime: entry.clockOutTime ? utcToLocal(entry.clockOutTime) : '',
       notes: entry.notes ?? '',
     });
   };
@@ -303,7 +280,7 @@ export default function MemberTimeHistoryPage() {
                 <Input
                   id="startDate"
                   type="date"
-                  value={dateFilter.startDate}
+                  value={utcToLocal(dateFilter.startDate).split('T')[0]}
                   onChange={(e) => setDateFilter(prev => ({ ...prev, startDate: e.target.value }))}
                 />
               </div>
@@ -312,7 +289,7 @@ export default function MemberTimeHistoryPage() {
                 <Input
                   id="endDate"
                   type="date"
-                  value={dateFilter.endDate}
+                  value={utcToLocal(dateFilter.endDate).split('T')[0]}
                   onChange={(e) => setDateFilter(prev => ({ ...prev, endDate: e.target.value }))}
                 />
               </div>
@@ -365,16 +342,16 @@ export default function MemberTimeHistoryPage() {
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4 text-muted-foreground" />
                           <span className="font-medium">
-                            {formatDate(entry.clockInTime)}
+                            {formatLocalDate(entry.clockInTime)}
                           </span>
                           <Badge variant={entry.status === 'clocked_in' ? 'default' : 'secondary'}>
                             {entry.status.replace('_', ' ')}
                           </Badge>
                         </div>
                         <div className="text-sm text-muted-foreground">
-                          <span>In: {formatDateTime(entry.clockInTime)}</span>
+                          <span>In: {formatLocalDateTime(entry.clockInTime)}</span>
                           {entry.clockOutTime && (
-                            <span> • Out: {formatDateTime(entry.clockOutTime)}</span>
+                            <span> • Out: {formatLocalDateTime(entry.clockOutTime)}</span>
                           )}
                         </div>
                         {entry.notes && (

@@ -5,6 +5,7 @@ import { api, type RouterOutputs } from "@/trpc/react";
 import { Loader2, AlertTriangle, CheckCircle2, XCircle, User, ShieldCheck, Hourglass, ThumbsUp, ThumbsDown, MinusCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatLocalDate } from "@/lib/utils/date";
 
 type FormResponseWithFullForm = RouterOutputs["form"]["getResponseById"]; // This includes the full form details
 
@@ -114,12 +115,12 @@ export default function FormStatusTracker({ responseId }: FormStatusTrackerProps
     if (status === 'approved') {
       finalStepStatus.completed = true;
       finalStepStatus.icon = <ShieldCheck className={cn(iconSize, "text-green-500")} />;
-      finalStepStatus.info = `Approved by ${safeFinalApproverId} on ${response.finalApprovedAt ? new Date(response.finalApprovedAt).toLocaleDateString() : 'N/A'}`;
+      finalStepStatus.info = `Approved by ${safeFinalApproverId} on ${response.finalApprovedAt ? formatLocalDate(response.finalApprovedAt) : 'N/A'}`;
       if(response.finalApprovalComments) finalStepStatus.info += ` - Comments: ${response.finalApprovalComments}`;
     } else if (status === 'denied_by_approval') {
       finalStepStatus.denied = true;
       finalStepStatus.icon = <XCircle className={cn(iconSize, "text-destructive")} />;
-      finalStepStatus.info = `Denied by ${safeFinalApproverId} on ${response.finalApprovedAt ? new Date(response.finalApprovedAt).toLocaleDateString() : 'N/A'}`;
+      finalStepStatus.info = `Denied by ${safeFinalApproverId} on ${response.finalApprovedAt ? formatLocalDate(response.finalApprovedAt) : 'N/A'}`;
       if(response.finalApprovalComments) finalStepStatus.info += ` - Comments: ${response.finalApprovalComments}`;
     } else if (status === 'pending_approval') {
       // Stays as pending

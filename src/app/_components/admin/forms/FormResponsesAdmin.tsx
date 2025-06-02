@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { skipToken } from '@tanstack/react-query';
+import { formatLocalDateTime } from "@/lib/utils/date";
 
 // Assuming FormResponseStatus is exported from your schema or a known set of string literals
 // Example: type FormResponseStatus = "pending_review" | "pending_approval" | "approved" | "denied_by_review" | "denied_by_approval" | "draft";
@@ -49,10 +50,7 @@ type FormListItem = RouterOutputs["form"]["listForms"]["items"][number];
 // Helper to format dates (optional, but nice for UI)
 const formatDate = (date: Date | string | undefined | null) => {
   if (!date) return "-";
-  return new Date(date).toLocaleDateString('en-US', {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
+  return formatLocalDateTime(date);
 };
 
 // Helper to make status badges look nicer

@@ -23,6 +23,7 @@ import { api } from "@/trpc/react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
+import { formatLocalDateTime, formatDuration } from "@/lib/utils/date";
 
 // Update Meeting type to match actual API response
 type Meeting = {
@@ -80,28 +81,6 @@ export default function SchedulePage() {
     (membership: DepartmentMembership) => 
       membership.isActive && membership.status === 'active'
   ) ?? [];
-
-  const formatDateTime = (date: Date) => {
-    return new Date(date).toLocaleString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-  };
-
-  const formatDuration = (minutes: number | null) => {
-    if (!minutes) return 'Unknown';
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    if (hours > 0) {
-      return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-    }
-    return `${mins}m`;
-  };
 
   const getTimeUntilMeeting = (scheduledAt: Date) => {
     const now = new Date();
@@ -331,6 +310,11 @@ export default function SchedulePage() {
               </Card>
             ) : (
               <div className="space-y-4">
+                {selectedDepartmentId && !meetingsLoading && meetings && meetings.length > 0 && (
+                  <p className="text-sm text-muted-foreground mb-4">
+                    All times are shown in your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone})
+                  </p>
+                )}
                 {(meetings as Meeting[]).map((meeting) => (
                   <Card key={meeting.id} className="hover:shadow-md transition-shadow">
                     <CardHeader>
@@ -349,10 +333,10 @@ export default function SchedulePage() {
                               )}
                             </CardTitle>
                             <CardDescription className="flex items-center gap-4 mt-1">
-                              <span className="flex items-center gap-1">
-                                <Calendar className="h-3 w-3" />
-                                {formatDateTime(meeting.scheduledAt)}
-                              </span>
+                              <div className="flex items-center gap-1">
+                                <Calendar className="h-4 w-4" />
+                                <span>{formatLocalDateTime(meeting.scheduledAt)}</span>
+                              </div>
                               <span className="flex items-center gap-1">
                                 <Clock className="h-3 w-3" />
                                 {formatDuration(meeting.duration)}

@@ -22,6 +22,7 @@ import {
 import { api } from "@/trpc/react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { formatLocalDateTime, formatLocalDate } from "@/lib/utils/date";
 
 type DepartmentMembership = {
   id: number;
@@ -85,25 +86,6 @@ export default function PerformancePage() {
     (membership: DepartmentMembership) => 
       membership.isActive && membership.status === 'active'
   ) ?? [];
-
-  const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const formatDateTime = (date: Date) => {
-    return new Date(date).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -292,7 +274,7 @@ export default function PerformancePage() {
                         {getDaysInDepartment(selectedMembership?.hireDate ?? null)}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Since {selectedMembership?.hireDate ? formatDate(selectedMembership.hireDate) : 'N/A'}
+                        Since {selectedMembership?.hireDate ? formatLocalDate(selectedMembership.hireDate) : 'N/A'}
                       </p>
                     </CardContent>
                   </Card>
@@ -354,7 +336,7 @@ export default function PerformancePage() {
                                       Promotion Record #{promotion.id}
                                     </div>
                                     <div className="text-sm text-muted-foreground">
-                                      {formatDateTime(promotion.effectiveDate)} • By {promotion.promotedBy}
+                                      {formatLocalDateTime(promotion.effectiveDate)} • By {promotion.promotedBy}
                                     </div>
                                     {promotion.reason && (
                                       <div className="text-sm text-muted-foreground mt-1">
@@ -407,7 +389,7 @@ export default function PerformancePage() {
                                         </Badge>
                                       </div>
                                       <div className="text-sm text-muted-foreground mt-1">
-                                        {formatDateTime(action.issuedAt)} • By {action.issuedBy}
+                                        {formatLocalDateTime(action.issuedAt)} • By {action.issuedBy}
                                       </div>
                                       <div className="text-sm mt-2">
                                         <strong>Reason:</strong> {action.reason}
@@ -419,7 +401,7 @@ export default function PerformancePage() {
                                       )}
                                       {action.expiresAt && (
                                         <div className="text-xs text-muted-foreground mt-2">
-                                          Expires: {formatDateTime(action.expiresAt)}
+                                          Expires: {formatLocalDateTime(action.expiresAt)}
                                         </div>
                                       )}
                                     </div>
@@ -469,7 +451,7 @@ export default function PerformancePage() {
                               <div className="flex justify-between text-sm">
                                 <span className="text-muted-foreground">Hire Date:</span>
                                 <span className="font-medium">
-                                  {selectedMembership?.hireDate ? formatDate(selectedMembership.hireDate) : 'N/A'}
+                                  {selectedMembership?.hireDate ? formatLocalDate(selectedMembership.hireDate) : 'N/A'}
                                 </span>
                               </div>
                               <div className="flex justify-between text-sm">

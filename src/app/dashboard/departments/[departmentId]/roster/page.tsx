@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { toast } from "sonner";
+import { formatLocalDate } from "@/lib/utils/date";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
 
@@ -119,14 +120,6 @@ export default function DepartmentRosterPage() {
     return status.split('_').map(word => 
       word.charAt(0).toUpperCase() + word.slice(1)
     ).join(' ');
-  };
-
-  const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
   };
 
   // Filter members by search term
@@ -463,10 +456,10 @@ export default function DepartmentRosterPage() {
                             )}
                           </TableCell>
                           <TableCell>
-                            {member.hireDate ? formatDate(member.hireDate) : 'N/A'}
+                            {member.hireDate ? formatLocalDate(member.hireDate) : 'N/A'}
                           </TableCell>
                           <TableCell>
-                            {member.lastActiveDate ? formatDate(member.lastActiveDate) : 'N/A'}
+                            {member.lastActiveDate ? formatLocalDate(member.lastActiveDate) : 'N/A'}
                           </TableCell>
                           {hasTimeclockPermission && (
                             <TableCell>

@@ -22,6 +22,7 @@ import {
 import { api } from "@/trpc/react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { formatLocalDateTime, formatLocalDate, formatDuration, utcToLocal } from "@/lib/utils/date";
 
 type DepartmentMembership = {
   id: number;
@@ -125,30 +126,6 @@ export default function TimeTrackingPage() {
     clockOutMutation.mutate({
       departmentId: selectedDepartmentId,
       notes: notes.trim() || undefined,
-    });
-  };
-
-  const formatDuration = (minutes: number) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
-  };
-
-  const formatDateTime = (date: Date | string) => {
-    return new Date(date).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const formatDate = (date: Date | string) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
     });
   };
 
@@ -426,7 +403,7 @@ export default function TimeTrackingPage() {
                     <Input
                       id="startDate"
                       type="date"
-                      value={dateFilter.startDate}
+                      value={utcToLocal(dateFilter.startDate).split('T')[0]}
                       onChange={(e) => setDateFilter(prev => ({ ...prev, startDate: e.target.value }))}
                     />
                   </div>
@@ -435,7 +412,7 @@ export default function TimeTrackingPage() {
                     <Input
                       id="endDate"
                       type="date"
-                      value={dateFilter.endDate}
+                      value={utcToLocal(dateFilter.endDate).split('T')[0]}
                       onChange={(e) => setDateFilter(prev => ({ ...prev, endDate: e.target.value }))}
                     />
                   </div>
@@ -477,16 +454,16 @@ export default function TimeTrackingPage() {
                               <div className="flex items-center gap-2">
                                 <Clock className="h-4 w-4 text-muted-foreground" />
                                 <span className="font-medium">
-                                  {formatDate(entry.clockInTime)}
+                                  {formatLocalDate(entry.clockInTime)}
                                 </span>
                                 <Badge variant={entry.status === 'clocked_in' ? 'default' : 'secondary'} className="text-xs">
                                   {entry.status.replace('_', ' ')}
                                 </Badge>
                               </div>
                               <div className="text-sm text-muted-foreground">
-                                <span>In: {formatDateTime(entry.clockInTime)}</span>
+                                <span>In: {formatLocalDateTime(entry.clockInTime)}</span>
                                 {entry.clockOutTime && (
-                                  <span> • Out: {formatDateTime(entry.clockOutTime)}</span>
+                                  <span> • Out: {formatLocalDateTime(entry.clockOutTime)}</span>
                                 )}
                               </div>
                               {entry.notes && (

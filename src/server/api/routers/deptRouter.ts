@@ -4707,6 +4707,30 @@ export const deptRouter = createTRPCRouter({
               })
               .returning();
 
+            // If warning or suspension, update member status with escalation logic
+            if (input.actionType === 'warning') {
+              // Fetch current status
+              const currentStatusResult = await postgrestDb
+                .select({ status: deptSchema.departmentMembers.status })
+                .from(deptSchema.departmentMembers)
+                .where(eq(deptSchema.departmentMembers.id, input.memberId))
+                .limit(1);
+              const currentStatus = currentStatusResult[0]?.status;
+              let newStatus = 'warned_1';
+              if (currentStatus === 'warned_1') newStatus = 'warned_2';
+              else if (currentStatus === 'warned_2') newStatus = 'warned_3';
+              else if (currentStatus === 'warned_3') newStatus = 'warned_3';
+              await postgrestDb
+                .update(deptSchema.departmentMembers)
+                .set({ status: newStatus as 'warned_1' | 'warned_2' | 'warned_3', updatedAt: new Date() })
+                .where(eq(deptSchema.departmentMembers.id, input.memberId));
+            } else if (input.actionType === 'suspension') {
+              await postgrestDb
+                .update(deptSchema.departmentMembers)
+                .set({ status: 'suspended', updatedAt: new Date() })
+                .where(eq(deptSchema.departmentMembers.id, input.memberId));
+            }
+
             return result[0];
           } catch (error) {
             if (error instanceof TRPCError) throw error;
@@ -4732,9 +4756,9 @@ export const deptRouter = createTRPCRouter({
                 departmentId: deptSchema.departmentMembers.departmentId,
                 discordId: deptSchema.departmentMembers.discordId,
               })
-              .from(deptSchema.departmentMembers)
-              .where(eq(deptSchema.departmentMembers.id, input.memberId))
-              .limit(1);
+                .from(deptSchema.departmentMembers)
+                .where(eq(deptSchema.departmentMembers.id, input.memberId))
+                .limit(1);
 
             if (targetMember.length === 0) {
               throw new TRPCError({
@@ -4942,8 +4966,8 @@ export const deptRouter = createTRPCRouter({
                   
                   // Only update status if it's currently a disciplinary status
                   if (currentStatus === 'warned_1' || currentStatus === 'warned_2' || currentStatus === 'warned_3' || currentStatus === 'suspended') {
-                    await postgrestDb
-                      .update(deptSchema.departmentMembers)
+              await postgrestDb
+                .update(deptSchema.departmentMembers)
                       .set({
                         status: 'active',
                         updatedAt: new Date(),
@@ -7080,7 +7104,7 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Delete attendance records first
-            await postgrestDb
+              await postgrestDb
               .delete(deptSchema.departmentMeetingAttendance)
               .where(eq(deptSchema.departmentMeetingAttendance.meetingId, input.meetingId));
 
@@ -7611,14 +7635,14 @@ export const deptRouter = createTRPCRouter({
             member: result[0],
             message: `Successfully joined ${department[0]!.name}. You are now pending training.`,
           };
-        } catch (error) {
-          if (error instanceof TRPCError) throw error;
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
             message: "Failed to join department",
-          });
-        }
-      }),
+            });
+          }
+        }),
 
     // Get my department memberships and their status
     getMyMemberships: protectedProcedure

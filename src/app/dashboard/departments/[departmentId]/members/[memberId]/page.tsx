@@ -303,24 +303,13 @@ export default function MemberDetailsPage() {
       'suspend': 'suspension',
     };
     
-    const statusMap = {
-      'warn': 'warned_1' as MemberStatus,
-      'suspend': 'suspended' as MemberStatus,
-    };
-    
-    // Issue disciplinary action first
+    // Issue disciplinary action only; backend will update status
     disciplineIssueMutation.mutate({
       memberId: memberData.id,
       actionType: actionTypeMap[action],
       reason: reason ?? `${action === 'warn' ? 'Warning' : 'Suspension'} issued via member management`,
       description: `${action === 'warn' ? 'Warning' : 'Suspension'} issued by management for: ${reason ?? 'No specific reason provided'}`,
       expiresAt: action === 'suspend' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : undefined, // 30 days for suspension
-    });
-    
-    // Update member status
-    updateMemberMutation.mutate({
-      id: memberId,
-      status: statusMap[action],
     });
   };
 
@@ -358,12 +347,7 @@ export default function MemberDetailsPage() {
       'suspend': 'suspension',
     };
     
-    const statusMap = {
-      'warn': 'warned_1' as MemberStatus,
-      'suspend': 'suspended' as MemberStatus,
-    };
-    
-    // Issue disciplinary action first
+    // Issue disciplinary action only; backend will update status
     disciplineIssueMutation.mutate({
       memberId: memberData.id,
       actionType: actionTypeMap[disciplineAction.type],
@@ -371,13 +355,6 @@ export default function MemberDetailsPage() {
       description: `${disciplineAction.type === 'warn' ? 'Warning' : 'Suspension'} issued by management for: ${disciplineAction.reason || 'No specific reason provided'}`,
       expiresAt: disciplineAction.type === 'suspend' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : undefined, // 30 days for suspension
     });
-    
-    // Update member status
-    updateMemberMutation.mutate({
-      id: memberId,
-      status: statusMap[disciplineAction.type],
-    });
-    
     // Close dialog
     closeDisciplineDialog();
   };

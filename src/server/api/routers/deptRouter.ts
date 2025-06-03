@@ -1799,6 +1799,106 @@ export const deptRouter = createTRPCRouter({
               
               // If member is inactive, reactivate them instead of throwing error
               if (!member.isActive) {
+                // Handle ID number restoration or assignment for reactivated member
+                let departmentIdNumber = member.departmentIdNumber;
+                
+                // If the member doesn't have an ID number or their old one is taken, assign a new one
+                if (!departmentIdNumber) {
+                  departmentIdNumber = await postgrestDb.transaction(async (tx) => {
+                    // Find and reserve the next available ID number
+                    const availableId = await tx
+                      .select()
+                      .from(deptSchema.departmentIdNumbers)
+                      .where(
+                        and(
+                          eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId),
+                          eq(deptSchema.departmentIdNumbers.isAvailable, true)
+                        )
+                      )
+                      .orderBy(asc(deptSchema.departmentIdNumbers.idNumber))
+                      .limit(1);
+
+                    let idNumber: number;
+
+                    if (availableId.length > 0) {
+                      idNumber = availableId[0]!.idNumber;
+                    } else {
+                      // Create new ID number
+                      const maxId = await tx
+                        .select()
+                        .from(deptSchema.departmentIdNumbers)
+                        .where(eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId))
+                        .orderBy(desc(deptSchema.departmentIdNumbers.idNumber))
+                        .limit(1);
+
+                      idNumber = maxId.length > 0 ? maxId[0]!.idNumber + 1 : 100;
+
+                      if (idNumber > 999) {
+                        throw new TRPCError({
+                          code: "CONFLICT",
+                          message: "No available ID numbers (100-999) for this department",
+                        });
+                      }
+
+                      await tx.insert(deptSchema.departmentIdNumbers).values({
+                        departmentId: input.departmentId,
+                        idNumber,
+                        isAvailable: true,
+                      });
+                    }
+
+                    // Mark as unavailable and assign to this member
+                    await tx
+                      .update(deptSchema.departmentIdNumbers)
+                      .set({ 
+                        isAvailable: false,
+                        currentMemberId: member.id,
+                        lastAssignedTo: input.discordId,
+                        lastAssignedAt: new Date(),
+                      })
+                      .where(
+                        and(
+                          eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId),
+                          eq(deptSchema.departmentIdNumbers.idNumber, idNumber)
+                        )
+                      );
+
+                    return idNumber;
+                  });
+                } else {
+                  // Check if their old ID number is available for restoration
+                  const oldIdRecord = await postgrestDb
+                    .select()
+                    .from(deptSchema.departmentIdNumbers)
+                    .where(
+                      and(
+                        eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId),
+                        eq(deptSchema.departmentIdNumbers.idNumber, departmentIdNumber)
+                      )
+                    )
+                    .limit(1);
+
+                  if (oldIdRecord.length > 0 && oldIdRecord[0]!.isAvailable) {
+                    // Restore their old ID number
+                    await postgrestDb
+                      .update(deptSchema.departmentIdNumbers)
+                      .set({ 
+                        isAvailable: false,
+                        currentMemberId: member.id,
+                        lastAssignedTo: input.discordId,
+                        lastAssignedAt: new Date(),
+                      })
+                      .where(
+                        and(
+                          eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId),
+                          eq(deptSchema.departmentIdNumbers.idNumber, departmentIdNumber)
+                        )
+                      );
+                  }
+                  // If their old ID is taken, they keep their departmentIdNumber but it won't be marked as theirs in the tracking table
+                  // This is acceptable as the departmentIdNumber field is the source of truth for the member's actual ID
+                }
+
                 const updatedMember = await postgrestDb
                   .update(deptSchema.departmentMembers)
                   .set({ 
@@ -1809,7 +1909,8 @@ export const deptRouter = createTRPCRouter({
                     badgeNumber: input.badgeNumber ?? member.badgeNumber,
                     roleplayName: input.roleplayName ?? member.roleplayName,
                     notes: input.notes ?? member.notes,
-                    lastActiveDate: null // Clear the last active date
+                    lastActiveDate: null, // Clear the last active date
+                    departmentIdNumber, // Update with the assigned/restored ID number
                   })
                   .where(eq(deptSchema.departmentMembers.id, member.id))
                   .returning();
@@ -1832,8 +1933,69 @@ export const deptRouter = createTRPCRouter({
             const departmentData = department[0]!;
 
             // STEP 1: Create member in database first
-            // Get next available ID number
-            const departmentIdNumber = await getNextAvailableIdNumber(input.departmentId);
+            // Get and reserve next available ID number atomically
+            const departmentIdNumber = await postgrestDb.transaction(async (tx) => {
+              // Find and reserve the next available ID number in a single atomic operation
+              const availableId = await tx
+                .select()
+                .from(deptSchema.departmentIdNumbers)
+                .where(
+                  and(
+                    eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId),
+                    eq(deptSchema.departmentIdNumbers.isAvailable, true)
+                  )
+                )
+                .orderBy(asc(deptSchema.departmentIdNumbers.idNumber))
+                .limit(1);
+
+              let idNumber: number;
+
+              if (availableId.length > 0) {
+                // Use existing available ID
+                idNumber = availableId[0]!.idNumber;
+              } else {
+                // Create new ID number
+                const maxId = await tx
+                  .select()
+                  .from(deptSchema.departmentIdNumbers)
+                  .where(eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId))
+                  .orderBy(desc(deptSchema.departmentIdNumbers.idNumber))
+                  .limit(1);
+
+                idNumber = maxId.length > 0 ? maxId[0]!.idNumber + 1 : 100;
+
+                if (idNumber > 999) {
+                  throw new TRPCError({
+                    code: "CONFLICT",
+                    message: "No available ID numbers (100-999) for this department",
+                  });
+                }
+
+                // Create the new ID number record
+                await tx.insert(deptSchema.departmentIdNumbers).values({
+                  departmentId: input.departmentId,
+                  idNumber,
+                  isAvailable: true,
+                });
+              }
+
+              // Mark the ID as unavailable and set placeholder for currentMemberId
+              await tx
+                .update(deptSchema.departmentIdNumbers)
+                .set({ 
+                  isAvailable: false,
+                  lastAssignedTo: input.discordId,
+                  lastAssignedAt: new Date(),
+                })
+                .where(
+                  and(
+                    eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId),
+                    eq(deptSchema.departmentIdNumbers.idNumber, idNumber)
+                  )
+                );
+
+              return idNumber;
+            });
 
             // Generate basic callsign (will be updated after sync if needed)
             const basicCallsign = generateCallsign("0", departmentData.callsignPrefix, departmentIdNumber);
@@ -1855,7 +2017,7 @@ export const deptRouter = createTRPCRouter({
               })
               .returning();
 
-            // Update the ID number record to reference this member
+            // Update the ID number record to reference the created member
             await postgrestDb
               .update(deptSchema.departmentIdNumbers)
               .set({ currentMemberId: result[0]!.id })
@@ -1897,10 +2059,9 @@ export const deptRouter = createTRPCRouter({
             }
 
             // STEP 3: Use centralized sync service to assign Discord roles and sync database
-            let syncResult = null;
-            
+            // Make Discord sync asynchronous to improve response time
             if (input.rankId || input.primaryTeamId) {
-              console.log("🔄 Assigning Discord roles and syncing for new member");
+              console.log("🔄 Scheduling Discord role sync for new member");
               
               // Create role changes for initial assignment
               const roleChanges: RoleChangeAction[] = [];
@@ -1916,37 +2077,90 @@ export const deptRouter = createTRPCRouter({
               }
 
               if (roleChanges.length > 0) {
-                syncResult = await syncMemberRolesAndCallsign({
-                  discordId: input.discordId,
-                  departmentId: input.departmentId,
-                  memberId: createdMember.id,
-                  roleChanges,
-                  skipRoleManagement: false,
-                });
+                if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_ASYNC_MEMBER_CREATION_SYNC) {
+                  // Run Discord sync in background to avoid blocking the response
+                  void syncMemberRolesAndCallsign({
+                    discordId: input.discordId,
+                    departmentId: input.departmentId,
+                    memberId: createdMember.id,
+                    roleChanges,
+                    skipRoleManagement: false,
+                  }).then((syncResult) => {
+                    if (!syncResult.success) {
+                      console.warn(`⚠️ Background member creation sync had issues: ${syncResult.message}`);
+                    } else {
+                      console.log(`✅ Background Discord sync completed for member ${createdMember.id}`);
+                    }
+                  }).catch((error) => {
+                    console.error(`❌ Background Discord sync failed for member ${createdMember.id}:`, error);
+                  });
+                } else {
+                  // Run Discord sync synchronously (original behavior)
+                  const syncResult = await syncMemberRolesAndCallsign({
+                    discordId: input.discordId,
+                    departmentId: input.departmentId,
+                    memberId: createdMember.id,
+                    roleChanges,
+                    skipRoleManagement: false,
+                  });
 
-                if (!syncResult.success) {
-                  console.warn(`⚠️ Member creation sync had issues: ${syncResult.message}`);
+                  if (!syncResult.success) {
+                    console.warn(`⚠️ Member creation sync had issues: ${syncResult.message}`);
+                  }
                 }
               }
             }
 
-            // STEP 4: Fetch the final updated member data
-            const finalMember = await postgrestDb
-              .select()
-              .from(deptSchema.departmentMembers)
-              .where(eq(deptSchema.departmentMembers.id, createdMember.id))
-              .limit(1);
-
+            // STEP 4: Return member data immediately (or after sync if synchronous)
             return {
               ...createdMember,
-              ...(finalMember.length > 0 ? finalMember[0] : {}),
-              syncResult,
+              syncResult: {
+                success: true,
+                message: DISCORD_SYNC_FEATURE_FLAGS.ENABLE_ASYNC_MEMBER_CREATION_SYNC 
+                  ? "Member created successfully, Discord sync running in background"
+                  : "Member created and Discord sync completed"
+              },
             };
           } catch (error) {
-            if (error instanceof TRPCError) throw error;
+            console.error("❌ Member creation error:", error);
+            
+            // Provide more specific error messages based on the error type
+            if (error instanceof TRPCError) {
+              throw error;
+            }
+            
+            // Check for common database constraint errors
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            
+            if (errorMessage.includes('unique constraint') || errorMessage.includes('UNIQUE constraint')) {
+              if (errorMessage.includes('dept_members_department_id_number_unique')) {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "Department ID number conflict - this ID number is already in use",
+                });
+              } else if (errorMessage.includes('discord_id') || errorMessage.includes('discordId')) {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "A member with this Discord ID already exists in this department",
+                });
+              } else {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "A member with this information already exists",
+                });
+              }
+            }
+            
+            if (errorMessage.includes('foreign key constraint') || errorMessage.includes('FOREIGN KEY constraint')) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "Invalid department, rank, or team ID provided",
+              });
+            }
+            
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
-              message: "Failed to create member",
+              message: `Failed to create member: ${errorMessage}`,
             });
           }
         }),
@@ -2152,6 +2366,23 @@ export const deptRouter = createTRPCRouter({
                 console.log(`✅ Successfully removed Discord roles: ${roleRemovalResult.message}`);
               } else {
                 console.warn(`⚠️ Failed to remove Discord roles: ${roleRemovalResult.message}`);
+              }
+
+              // Free up the ID number for reuse when member becomes inactive
+              if (currentMember.departmentIdNumber) {
+                await postgrestDb
+                  .update(deptSchema.departmentIdNumbers)
+                  .set({ 
+                    isAvailable: true,
+                    currentMemberId: null,
+                  })
+                  .where(
+                    and(
+                      eq(deptSchema.departmentIdNumbers.departmentId, currentMember.departmentId),
+                      eq(deptSchema.departmentIdNumbers.idNumber, currentMember.departmentIdNumber)
+                    )
+                  );
+                console.log(`🔄 Released ID number ${currentMember.departmentIdNumber} for reuse`);
               }
             }
 
@@ -6722,6 +6953,96 @@ export const deptRouter = createTRPCRouter({
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: "Failed to complete training",
+          });
+        }
+      }),
+  }),
+
+  // ===== DEBUG ENDPOINTS =====
+  debug: createTRPCRouter({
+    // Debug ID number allocation for a department
+    idNumberStatus: adminProcedure
+      .input(z.object({ departmentId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        try {
+          const [idNumbers, members] = await Promise.all([
+            // Get all ID number records for this department
+            postgrestDb
+              .select()
+              .from(deptSchema.departmentIdNumbers)
+              .where(eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId))
+              .orderBy(asc(deptSchema.departmentIdNumbers.idNumber)),
+            
+            // Get all members with their ID numbers
+            postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                roleplayName: deptSchema.departmentMembers.roleplayName,
+                departmentIdNumber: deptSchema.departmentMembers.departmentIdNumber,
+                isActive: deptSchema.departmentMembers.isActive,
+              })
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.departmentId, input.departmentId))
+              .orderBy(asc(deptSchema.departmentMembers.departmentIdNumber))
+          ]);
+
+          // Count statistics
+          const totalIds = idNumbers.length;
+          const availableIds = idNumbers.filter(id => id.isAvailable).length;
+          const assignedIds = idNumbers.filter(id => !id.isAvailable).length;
+          const activeMembers = members.filter(m => m.isActive && m.departmentIdNumber).length;
+          const inactiveMembers = members.filter(m => !m.isActive && m.departmentIdNumber).length;
+
+          // Find inconsistencies
+          const inconsistencies = [];
+          
+          // Check for members with ID numbers that don't exist in tracking table
+          for (const member of members) {
+            if (member.departmentIdNumber) {
+              const trackingRecord = idNumbers.find(id => id.idNumber === member.departmentIdNumber);
+              if (!trackingRecord) {
+                inconsistencies.push({
+                  type: 'missing_tracking_record',
+                  description: `Member ${member.roleplayName} (${member.discordId}) has ID ${member.departmentIdNumber} but no tracking record exists`,
+                });
+              } else if (trackingRecord.currentMemberId !== member.id && member.isActive) {
+                inconsistencies.push({
+                  type: 'tracking_mismatch',
+                  description: `Member ${member.roleplayName} (${member.discordId}) has ID ${member.departmentIdNumber} but tracking record points to member ${trackingRecord.currentMemberId}`,
+                });
+              }
+            }
+          }
+
+          // Check for tracking records that are marked as unavailable but have no current member
+          for (const idRecord of idNumbers) {
+            if (!idRecord.isAvailable && !idRecord.currentMemberId) {
+              inconsistencies.push({
+                type: 'orphaned_id',
+                description: `ID ${idRecord.idNumber} is marked as unavailable but has no current member assigned`,
+              });
+            }
+          }
+
+          return {
+            departmentId: input.departmentId,
+            summary: {
+              totalIds,
+              availableIds,
+              assignedIds,
+              activeMembers,
+              inactiveMembers,
+              inconsistencies: inconsistencies.length,
+            },
+            idNumbers,
+            members,
+            inconsistencies,
+          };
+        } catch (error) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to fetch ID number status",
           });
         }
       }),

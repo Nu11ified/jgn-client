@@ -310,6 +310,36 @@ export default function MemberDetailsPage() {
     },
   });
 
+  // Add mutation specifically for ending LOA (when dismiss isn't available)
+  const endLoaMutation = api.dept.user.discipline.issue.useMutation({
+    onSuccess: () => {
+      showQuickSuccess("LOA ended successfully", "LOA return action recorded and status updated");
+      // After LOA return action is issued, update member status to active
+      updateMemberMutation.mutate({
+        id: memberId,
+        status: 'active'
+      });
+    },
+    onError: (error) => {
+      showQuickError(`Failed to end LOA: ${error.message}`);
+    },
+  });
+
+  // Add mutation specifically for unsuspending users (when dismiss isn't available)
+  const unsuspendMutation = api.dept.user.discipline.issue.useMutation({
+    onSuccess: () => {
+      showQuickSuccess("Member unsuspended successfully", "Unsuspension action recorded and status updated");
+      // After unsuspended action is issued, update member status to active
+      updateMemberMutation.mutate({
+        id: memberId,
+        status: 'active'
+      });
+    },
+    onError: (error) => {
+      showQuickError(`Failed to unsuspend member: ${error.message}`);
+    },
+  });
+
   const handlePromote = (toRankId: number, reason?: string) => {
     if (!memberData) return;
     
@@ -683,8 +713,8 @@ export default function MemberDetailsPage() {
 
         {statusBanner}
 
-        {/* If member is not active, show access restriction message */}
-        {memberData && memberData.status !== 'active' ? (
+        {/* If member is not active AND viewing own profile, show access restriction message */}
+        {memberData && memberData.status !== 'active' && isEditingSelf ? (
           <div className="my-8 p-6 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-900 rounded-md">
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="h-5 w-5 text-yellow-600" />
@@ -695,7 +725,10 @@ export default function MemberDetailsPage() {
               Please contact department leadership for more information or assistance.
             </div>
           </div>
-        ) : (
+        ) : null}
+
+        {/* Always show member details to management, only restrict if user is viewing own restricted profile */}
+        {!(memberData && memberData.status !== 'active' && isEditingSelf) && (
           <>
             <div className="grid gap-6 lg:grid-cols-2">
               {/* Member Information */}
@@ -1403,6 +1436,94 @@ export default function MemberDetailsPage() {
                               >
                                 <Timer className="h-4 w-4 mr-2" />
                                 {loaMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Set LOA"}
+                              </Button>
+                            )}
+
+                            {canDiscipline && memberData.status === 'leave_of_absence' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="justify-start text-green-600 hover:text-green-700"
+                                onClick={() => {
+                                  // Debug: Log disciplinary actions to see what we have
+                                  console.log('All disciplinary actions:', disciplinaryActions);
+                                  console.log('Member status:', memberData.status);
+                                  
+                                  // Find the active LOA disciplinary action
+                                  const activeLOA = disciplinaryActions?.find(
+                                    (action: DisciplinaryAction) => {
+                                      console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
+                                      return action.isActive && action.actionType === 'leave_of_absence';
+                                    }
+                                  );
+                                  
+                                  console.log('Found active LOA:', activeLOA);
+                                  
+                                  if (activeLOA) {
+                                    // Use dismiss if we found the active LOA
+                                    disciplineDismissMutation.mutate({
+                                      actionId: activeLOA.id,
+                                      reason: 'LOA ended early by management'
+                                    });
+                                  } else {
+                                    // Use the new endLoaMutation for fallback
+                                    console.log('Using fallback: ending LOA with return action + status update');
+                                    endLoaMutation.mutate({
+                                      memberId: memberData.id,
+                                      actionType: 'loa_returned',
+                                      reason: 'LOA ended early by management',
+                                      description: 'LOA ended early by management',
+                                    });
+                                  }
+                                }}
+                                disabled={disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                              >
+                                <CheckCircle className="h-4 w-4 mr-2" />
+                                {(disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "End LOA Early"}
+                              </Button>
+                            )}
+
+                            {canDiscipline && memberData.status === 'suspended' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="justify-start text-green-600 hover:text-green-700"
+                                onClick={() => {
+                                  // Debug: Log disciplinary actions to see what we have
+                                  console.log('All disciplinary actions:', disciplinaryActions);
+                                  console.log('Member status:', memberData.status);
+                                  
+                                  // Find the active suspension disciplinary action
+                                  const activeSuspension = disciplinaryActions?.find(
+                                    (action: DisciplinaryAction) => {
+                                      console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
+                                      return action.isActive && action.actionType === 'suspension';
+                                    }
+                                  );
+                                  
+                                  console.log('Found active suspension:', activeSuspension);
+                                  
+                                  if (activeSuspension) {
+                                    // Use dismiss if we found the active suspension
+                                    disciplineDismissMutation.mutate({
+                                      actionId: activeSuspension.id,
+                                      reason: 'Suspension ended early by management'
+                                    });
+                                  } else {
+                                    // Use the new unsuspendMutation for fallback
+                                    console.log('Using fallback: unsuspending with unsuspended action + status update');
+                                    unsuspendMutation.mutate({
+                                      memberId: memberData.id,
+                                      actionType: 'unsuspended',
+                                      reason: 'Suspension ended early by management',
+                                      description: 'Suspension ended early by management',
+                                    });
+                                  }
+                                }}
+                                disabled={disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                              >
+                                <CheckCircle className="h-4 w-4 mr-2" />
+                                {(disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "Unsuspend Member"}
                               </Button>
                             )}
                           </div>

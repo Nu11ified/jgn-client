@@ -914,7 +914,7 @@ export default function DepartmentDetailClient({ department: initialDepartment }
     });
     setIsEditMemberDialogOpen(true);
   };
-
+  // Edit Department Dialog
   const handleOpenEditDepartmentDialog = () => {
     editDepartmentForm.reset({
       name: department.name,

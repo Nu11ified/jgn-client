@@ -6,7 +6,6 @@ import { postgrestDb } from "@/server/postgres";
 import * as deptSchema from "@/server/postgres/schema/department";
 import type { RankLimitInfo, RankLimitValidationResult } from "@/server/postgres/schema/department";
 import { env } from "@/env";
-import axios from "axios";
 
 // Import the new department services
 import {
@@ -3501,7 +3500,7 @@ export const deptRouter = createTRPCRouter({
               })
               .returning();
 
-            // If warning or suspension, update member status with escalation logic
+            // If warning or suspension or LOA, update member status
             if (input.actionType === 'warning') {
               // Fetch current status
               const currentStatusResult = await postgrestDb
@@ -3519,10 +3518,24 @@ export const deptRouter = createTRPCRouter({
                 .set({ status: newStatus as 'warned_1' | 'warned_2' | 'warned_3', updatedAt: new Date() })
                 .where(eq(deptSchema.departmentMembers.id, input.memberId));
             } else if (input.actionType === 'suspension') {
+              // Suspension: set status and remove Discord roles
               await postgrestDb
                 .update(deptSchema.departmentMembers)
                 .set({ status: 'suspended', updatedAt: new Date() })
                 .where(eq(deptSchema.departmentMembers.id, input.memberId));
+              // Remove Discord roles for suspended
+              const member = targetMember[0]!;
+              await removeDiscordRolesForInactiveMember(
+                member.discordId,
+                member.departmentId
+              );
+            } else if (input.actionType === 'leave_of_absence') {
+              // LOA: set status and do NOT remove Discord roles
+              await postgrestDb
+                .update(deptSchema.departmentMembers)
+                .set({ status: 'leave_of_absence', updatedAt: new Date() })
+                .where(eq(deptSchema.departmentMembers.id, input.memberId));
+              // No Discord role removal for LOA
             }
 
             return result[0];

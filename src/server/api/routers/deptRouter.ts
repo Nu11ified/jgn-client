@@ -14,7 +14,7 @@ const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
 // Feature flags for Discord sync behavior
 const DISCORD_SYNC_FEATURE_FLAGS = {
   ENABLE_AUTO_SYNC_AFTER_ROLE_CHANGE: true,
-  SYNC_DELAY_MS: 10000, // Wait time for Discord propagation
+  SYNC_DELAY_MS: 25000, // Wait time for Discord propagation
   ENABLE_RANK_LIMIT_VALIDATION: true,
   ENABLE_CALLSIGN_AUTO_GENERATION: true,
   ENABLE_DETAILED_LOGGING: true,
@@ -6380,7 +6380,6 @@ export const deptRouter = createTRPCRouter({
               statusConditions.push(eq(deptSchema.departmentMembers.status, "active"));
             }
 
-
             const members = await postgrestDb
               .select({
                 id: deptSchema.departmentMembers.id,
@@ -6428,8 +6427,8 @@ export const deptRouter = createTRPCRouter({
             return {
               members: groupedMembers,
               userPermissions: permissions,
-              canAssignTeams: permissions.manage_members,
-              canBypassTraining: permissions.manage_members,
+              canAssignTeams: permissions.manage_members || permissions.recruit_members,
+              canBypassTraining: permissions.manage_members || permissions.recruit_members,
             };
           } catch (error) {
             if (error instanceof TRPCError) throw error;

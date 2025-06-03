@@ -88,10 +88,16 @@ export default function DepartmentDetailPage() {
     permission: 'view_all_members'
   }, { enabled: !!userMembership?.isActive });
 
+  // Get both permissions
   const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'manage_members'
-  }, { enabled: !!userMembership?.isActive });
+  });
+
+  const { data: canRecruitMembers } = api.dept.user.checkPermission.useQuery({ 
+    departmentId,
+    permission: 'recruit_members'
+  });
 
   // Join department mutation
   const joinDepartmentMutation = api.dept.discovery.joinDepartment.useMutation({
@@ -560,7 +566,7 @@ export default function DepartmentDetailPage() {
                       </Link>
                     )}
                     
-                    {canManageMembers?.hasPermission && (
+                    {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                       <Link href={`/dashboard/departments/${departmentId}/management`}>
                         <Button variant="outline" size="sm" className="w-full justify-start">
                           <UserCog className="h-4 w-4 mr-2" />
@@ -581,7 +587,7 @@ export default function DepartmentDetailPage() {
                       </Link>
                     )}
                     
-                    {canManageMembers?.hasPermission && (
+                    {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                       <Link href={`/dashboard/departments/${departmentId}/management`}>
                         <Button variant="outline" size="sm" className="w-full justify-start">
                           <UserCog className="h-4 w-4 mr-2" />
@@ -590,7 +596,7 @@ export default function DepartmentDetailPage() {
                       </Link>
                     )}
                     
-                    {!canViewRoster?.hasPermission && !canManageMembers?.hasPermission && (
+                    {!canViewRoster?.hasPermission && !(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                       <div className="text-center py-4 text-muted-foreground">
                         <p className="text-sm">
                           Contact department leadership for more options

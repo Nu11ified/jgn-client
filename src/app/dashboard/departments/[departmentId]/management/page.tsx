@@ -53,6 +53,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { formatLocalDateTime, formatLocalDate, formatDuration, localToUTC, utcToLocal, getCurrentLocalDateTime } from "@/lib/utils/date";
+import { TRPCError } from "@trpc/server";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
 
@@ -86,6 +87,11 @@ export default function TrainingManagementPage() {
   const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'manage_members'
+  });
+
+  const { data: canRecruitMembers } = api.dept.user.checkPermission.useQuery({ 
+    departmentId,
+    permission: 'recruit_members'
   });
 
   const { data: canScheduleMeetings } = api.dept.user.checkPermission.useQuery({ 
@@ -125,6 +131,12 @@ export default function TrainingManagementPage() {
 
   // Get department stats
   const { data: stats } = api.dept.user.info.getDepartmentStats.useQuery({ departmentId });
+
+  // Error handlers
+  const handleError = (error: unknown, message: string) => {
+    console.error(message, error);
+    toast.error(message);
+  };
 
   // Meeting form
   const meetingForm = useForm<CreateMeetingFormData>({
@@ -744,7 +756,7 @@ export default function TrainingManagementPage() {
                         </div>
                         
                         <div className="flex items-center space-x-2">
-                          {canManageMembers?.hasPermission && (
+                          {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                             <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
                               <Button variant="outline" size="sm">
                                 <Edit className="h-4 w-4" />
@@ -831,7 +843,7 @@ export default function TrainingManagementPage() {
                         </div>
                         
                         <div className="flex items-center space-x-2">
-                          {canManageMembers?.hasPermission && (
+                          {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                             <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
                               <Button variant="outline" size="sm">
                                 <Edit className="h-4 w-4" />
@@ -922,7 +934,7 @@ export default function TrainingManagementPage() {
                           </div>
                           
                           <div className="flex items-center space-x-2">
-                            {canManageMembers?.hasPermission && (
+                            {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                               <Link href={`/dashboard/departments/${departmentId}/members/${member.id}`}>
                                 <Button variant="outline" size="sm">
                                   <Edit className="h-4 w-4" />

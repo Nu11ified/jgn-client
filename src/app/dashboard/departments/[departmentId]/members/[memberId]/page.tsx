@@ -117,6 +117,12 @@ export default function MemberDetailsPage() {
     limit: 1,
   });
 
+  // Get the full department roster to look up issuer names
+  const { data: fullRosterData } = api.dept.user.info.getDepartmentRoster.useQuery({
+    departmentId,
+    includeInactive: true, // Include inactive members as they might have issued past actions
+  });
+
   // Find the specific member from roster data
   const memberData = rosterData?.members[0];
 
@@ -1026,7 +1032,19 @@ export default function MemberDetailsPage() {
                                       </Badge>
                                     </div>
                                     <div className="text-sm text-muted-foreground">
-                                      {formatLocalDateTime(action.issuedAt)} • By {action.issuedBy}
+                                      {formatLocalDateTime(action.issuedAt)} • By {' '}
+                                      {(() => {
+                                        let issuerDisplay = action.issuedBy;
+                                        if (fullRosterData?.members) {
+                                          const issuer = fullRosterData.members.find(m => m.discordId === action.issuedBy);
+                                          if (issuer) {
+                                            issuerDisplay = `${issuer.roleplayName ?? 'N/A'} (${action.issuedBy})`;
+                                          } else if (/^\d+$/.test(action.issuedBy)) {
+                                            issuerDisplay = `User (${action.issuedBy})`;
+                                          }
+                                        }
+                                        return issuerDisplay;
+                                      })()}
                                     </div>
                                     <div className="text-sm mt-2">
                                       <strong>Reason:</strong> {action.reason}

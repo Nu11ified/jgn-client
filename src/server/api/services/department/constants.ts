@@ -11,6 +11,6 @@ export const DISCORD_SYNC_FEATURE_FLAGS = {
 
 // Default sync configuration - optimized for better performance
 export const DEFAULT_SYNC_CONFIG = {
-  MAX_ATTEMPTS: 2, // Reduced from 3 to 2 - most changes happen immediately
-  INTERVAL_MS: 1000, // Reduced from 1.5s to 1s - faster polling
+  MAX_ATTEMPTS: 3, // Reduced from 3 to 2 - most changes happen immediately
+  INTERVAL_MS: 1500, // Reduced from 1.5s to 1s - faster polling
 } as const; 

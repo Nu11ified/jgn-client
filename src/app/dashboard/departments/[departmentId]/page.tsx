@@ -82,6 +82,9 @@ export default function DepartmentDetailPage() {
   const { data: memberships } = api.dept.discovery.getMyMemberships.useQuery();
   const userMembership = memberships?.find(m => m.departmentId === departmentId);
 
+  // Fetch department stats for accurate member count
+  const { data: stats } = api.dept.user.info.getDepartmentStats.useQuery({ departmentId });
+
   // Check permissions for navigation
   const { data: canViewRoster } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
@@ -694,7 +697,7 @@ export default function DepartmentDetailPage() {
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Total Members:</span>
                   <span className="font-medium">
-                    {typedDepartmentInfo.ranks?.reduce((sum, rank) => sum + (rank.memberCount ?? 0), 0) ?? 0}
+                    {stats?.totalMembers ?? 0}
                   </span>
                 </div>
               </CardContent>

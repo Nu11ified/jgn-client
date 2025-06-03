@@ -168,22 +168,6 @@ type CreateMemberSyncResults = {
   teamSync: SyncResultItem | null;
 };
 
-type CreateMemberResult = {
-  syncResults?: CreateMemberSyncResults;
-};
-
-// Helper function to check if an object has the expected sync result structure
-const isSyncResultItem = (obj: unknown): obj is SyncResultItem => {
-  return typeof obj === 'object' && 
-    obj !== null && 
-    'success' in obj && 
-    'updatedDepartments' in obj && 
-    'message' in obj &&
-    typeof (obj as Record<string, unknown>).success === 'boolean' &&
-    Array.isArray((obj as Record<string, unknown>).updatedDepartments) &&
-    typeof (obj as Record<string, unknown>).message === 'string';
-};
-
 // Helper function to check if syncResults has the expected structure
 const hasSyncResults = (result: unknown): result is { syncResults: CreateMemberSyncResults } => {
   return typeof result === 'object' && 
@@ -211,6 +195,12 @@ export default function DepartmentDetailClient({ department: initialDepartment }
   const [selectedRank, setSelectedRank] = useState<NonNullable<DepartmentWithRelations['ranks']>[0] | null>(null);
   const [selectedTeamForEdit, setSelectedTeamForEdit] = useState<NonNullable<DepartmentWithRelations['teams']>[0] | null>(null);
   const [selectedMember, setSelectedMember] = useState<NonNullable<DepartmentWithRelations['members']>[0] | null>(null);
+
+  // 1. Add back filter state
+  const [memberStatusFilter, setMemberStatusFilter] = useState("all");
+  const [memberRankFilter, setMemberRankFilter] = useState("all");
+  const [memberTeamFilter, setMemberTeamFilter] = useState("all");
+  const [memberSearchFilter, setMemberSearchFilter] = useState("");
 
   const trpcUtils = api.useUtils();
 
@@ -911,10 +901,12 @@ export default function DepartmentDetailClient({ department: initialDepartment }
 
   const handleOpenEditMemberDialog = (member: NonNullable<DepartmentWithRelations['members']>[0]) => {
     setSelectedMember(member);
+    // Find the rankId from the member's rankName
+    const rank = department.ranks?.find(r => r.name === member.rankName);
     editMemberForm.reset({
       discordId: member.discordId,
       roleplayName: member.roleplayName ?? "",
-      rankId: undefined, // We'll need to determine this from the rank name if needed
+      rankId: rank ? rank.id : undefined,
       badgeNumber: member.badgeNumber ?? "",
       primaryTeamId: member.primaryTeamId ?? undefined,
       status: (member.status) ?? "pending",
@@ -942,6 +934,24 @@ export default function DepartmentDetailClient({ department: initialDepartment }
       setDepartment(departmentData);
     }
   }, [departmentData]);
+
+  // 2. Sort and filter members
+  const sortedMembers = [...(department.members ?? [])].sort((a, b) => {
+    const aLevel = a.rankLevel ?? 0;
+    const bLevel = b.rankLevel ?? 0;
+    if (bLevel !== aLevel) return bLevel - aLevel;
+    return (a.roleplayName ?? '').localeCompare(b.roleplayName ?? '');
+  });
+  const filteredMembers = sortedMembers.filter(member => {
+    if (memberStatusFilter !== 'all' && member.status !== memberStatusFilter) return false;
+    if (memberRankFilter !== 'all' && member.rankName !== department.ranks?.find(r => r.id.toString() === memberRankFilter)?.name) return false;
+    if (memberTeamFilter !== 'all' && member.primaryTeamId?.toString() !== memberTeamFilter) return false;
+    if (memberSearchFilter) {
+      const search = memberSearchFilter.toLowerCase();
+      if (!member.discordId.toLowerCase().includes(search) && !(member.roleplayName?.toLowerCase().includes(search))) return false;
+    }
+    return true;
+  });
 
   return (
     <div className="space-y-6">
@@ -1370,11 +1380,42 @@ export default function DepartmentDetailClient({ department: initialDepartment }
               </div>
             </CardHeader>
             <CardContent>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <Select value={memberStatusFilter} onValueChange={setMemberStatusFilter}>
+                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    {Object.entries(MEMBER_STATUS_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={memberRankFilter} onValueChange={setMemberRankFilter}>
+                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="Rank" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Ranks</SelectItem>
+                    {department.ranks?.map(rank => (
+                      <SelectItem key={rank.id} value={rank.id.toString()}>{rank.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={memberTeamFilter} onValueChange={setMemberTeamFilter}>
+                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="Team" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Teams</SelectItem>
+                    {department.teams?.map(team => (
+                      <SelectItem key={team.id} value={team.id.toString()}>{team.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input className="w-[180px]" placeholder="Search..." value={memberSearchFilter} onChange={e => setMemberSearchFilter(e.target.value)} />
+              </div>
               <div className="border rounded-lg">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Discord ID</TableHead>
+                      <TableHead>Roleplay Name</TableHead>
                       <TableHead>Callsign</TableHead>
                       <TableHead>Badge Number</TableHead>
                       <TableHead>Primary Team</TableHead>
@@ -1391,7 +1432,7 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                         </TableCell>
                       </TableRow>
                     ) : (
-                      department.members.map((member) => {
+                      filteredMembers.map((member) => {
                         // Find the member's primary team
                         const primaryTeam = member.primaryTeamId 
                           ? department.teams?.find(team => team.id === member.primaryTeamId)
@@ -1406,6 +1447,9 @@ export default function DepartmentDetailClient({ department: initialDepartment }
                                   <Badge variant="secondary" className="text-xs">Inactive</Badge>
                                 )}
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              {member.roleplayName ?? <span className="text-muted-foreground">No name</span>}
                             </TableCell>
                             <TableCell>
                               {member.callsign ? (
@@ -2719,144 +2763,149 @@ export default function DepartmentDetailClient({ department: initialDepartment }
         setSelectedMember(null);
         editMemberForm.reset();
       }}>
-        <DialogContent className="sm:max-w-[600px]">
+        <DialogContent className="sm:max-w-[700px]">
           <DialogHeader>
-            <DialogTitle>Edit Member</DialogTitle>
-            <DialogDescription>Update member details and assignments</DialogDescription>
+            <DialogTitle>Member Details</DialogTitle>
+            <DialogDescription>View and manage member information</DialogDescription>
           </DialogHeader>
-          
-          <form onSubmit={editMemberForm.handleSubmit(handleUpdateMember)} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="edit-member-discord-id">Discord ID</Label>
-              <Input
-                id="edit-member-discord-id"
-                {...editMemberForm.register("discordId")}
-                placeholder="Enter member's Discord ID"
-                disabled
-              />
-              {editMemberForm.formState.errors.discordId && (
-                <p className="text-sm text-red-500">{editMemberForm.formState.errors.discordId.message}</p>
+          <Tabs defaultValue="overview" className="w-full">
+            <TabsList className="grid w-full grid-cols-3 mb-4">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="edit">Edit Details</TabsTrigger>
+              <TabsTrigger value="other">Other Features</TabsTrigger>
+            </TabsList>
+            {/* Overview Tab */}
+            <TabsContent value="overview" className="space-y-4">
+              {selectedMember && (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium">Roleplay Name</label>
+                      <p className="text-sm text-muted-foreground">{selectedMember.roleplayName ?? 'Not set'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Discord ID</label>
+                      <p className="text-sm font-mono">{selectedMember.discordId}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Badge Number</label>
+                      <p className="text-sm text-muted-foreground">{selectedMember.badgeNumber ?? 'Not assigned'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Status</label>
+                      <Badge variant="outline">{selectedMember.status}</Badge>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Rank</label>
+                      <p className="text-sm text-muted-foreground">{selectedMember.rankName ?? 'No rank'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Primary Team</label>
+                      <p className="text-sm text-muted-foreground">{selectedMember.primaryTeamId ? (department.teams?.find(t => t.id === selectedMember.primaryTeamId)?.name ?? 'Unknown') : 'No team'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Hire Date</label>
+                      <p className="text-sm text-muted-foreground">{selectedMember.hireDate ? new Date(selectedMember.hireDate).toLocaleDateString() : 'Not set'}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-4">
+                    {selectedMember.isActive ? (
+                      <>
+                        <Button variant="outline" size="sm" onClick={() => handleDeleteMember(selectedMember.id, selectedMember.discordId)}>
+                          Remove Member
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button variant="outline" size="sm" onClick={() => handleReactivateMember(selectedMember.id, selectedMember.discordId)}>
+                          Reactivate Member
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleHardDeleteMember(selectedMember.id, selectedMember.discordId)}>
+                          Hard Delete
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
               )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="edit-member-roleplay-name">Roleplay Name</Label>
-                <Input
-                  id="edit-member-roleplay-name"
-                  {...editMemberForm.register("roleplayName")}
-                  placeholder="Enter member's roleplay name (optional)"
-                />
+            </TabsContent>
+            {/* Edit Details Tab */}
+            <TabsContent value="edit" className="space-y-4">
+              {selectedMember && (
+                <form onSubmit={editMemberForm.handleSubmit(handleUpdateMember)} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-member-roleplay-name">Roleplay Name</Label>
+                      <Input id="edit-member-roleplay-name" {...editMemberForm.register("roleplayName")} placeholder="Enter member's roleplay name (optional)" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-member-badge">Badge Number</Label>
+                      <Input id="edit-member-badge" {...editMemberForm.register("badgeNumber")} placeholder="Enter badge number (optional)" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-member-rank">Rank</Label>
+                      <Select value={editMemberForm.watch("rankId")?.toString() ?? "none"} onValueChange={(value) => editMemberForm.setValue("rankId", value === "none" ? undefined : parseInt(value))}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select rank (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No rank</SelectItem>
+                          {department.ranks?.filter(r => r.isActive).map((rank) => (
+                            <SelectItem key={rank.id} value={rank.id.toString()}>{rank.name} ({rank.callsign})</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-member-team">Primary Team</Label>
+                      <Select value={editMemberForm.watch("primaryTeamId")?.toString() ?? "none"} onValueChange={(value) => editMemberForm.setValue("primaryTeamId", value === "none" ? undefined : parseInt(value))}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select team (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No team</SelectItem>
+                          {department.teams?.filter(t => t.isActive).map((team) => (
+                            <SelectItem key={team.id} value={team.id.toString()}>{team.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-member-status">Status</Label>
+                      <Select value={editMemberForm.watch("status") ?? "pending"} onValueChange={(value) => editMemberForm.setValue("status", value as "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted")}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(MEMBER_STATUS_LABELS).map(([value, label]) => (
+                            <SelectItem key={value} value={value}>{label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-member-notes">Notes</Label>
+                    <Textarea id="edit-member-notes" {...editMemberForm.register("notes")} placeholder="Enter any notes about this member (optional)" rows={3} />
+                  </div>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={() => {
+                      setIsEditMemberDialogOpen(false);
+                      setSelectedMember(null);
+                      editMemberForm.reset();
+                    }}>Cancel</Button>
+                    <Button type="submit" disabled={updateMemberMutation.isPending}>{updateMemberMutation.isPending ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Updating...</>) : ('Update Member')}</Button>
+                  </DialogFooter>
+                </form>
+              )}
+            </TabsContent>
+            {/* Placeholder for future features */}
+            <TabsContent value="other" className="space-y-4 text-center text-muted-foreground">
+              <div className="py-8">
+                <p>Performance, promotions, disciplinary actions, and time tracking will be available here once admin API endpoints are implemented.</p>
               </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="edit-member-rank">Rank</Label>
-                <Select
-                  value={editMemberForm.watch("rankId")?.toString() ?? "none"}
-                  onValueChange={(value) => editMemberForm.setValue("rankId", value === "none" ? undefined : parseInt(value))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select rank (optional)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No rank</SelectItem>
-                    {department.ranks?.filter(r => r.isActive).map((rank) => (
-                      <SelectItem key={rank.id} value={rank.id.toString()}>
-                        {rank.name} ({rank.callsign})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="edit-member-team">Primary Team</Label>
-                <Select
-                  value={editMemberForm.watch("primaryTeamId")?.toString() ?? "none"}
-                  onValueChange={(value) => editMemberForm.setValue("primaryTeamId", value === "none" ? undefined : parseInt(value))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select team (optional)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No team</SelectItem>
-                    {department.teams?.filter(t => t.isActive).map((team) => (
-                      <SelectItem key={team.id} value={team.id.toString()}>
-                        {team.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="edit-member-badge">Badge Number</Label>
-                <Input
-                  id="edit-member-badge"
-                  {...editMemberForm.register("badgeNumber")}
-                  placeholder="Enter badge number (optional)"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="edit-member-status">Status</Label>
-              <Select
-                value={editMemberForm.watch("status") ?? "pending"}
-                onValueChange={(value) => editMemberForm.setValue("status", value as "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted")}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(MEMBER_STATUS_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="edit-member-notes">Notes</Label>
-              <Textarea
-                id="edit-member-notes"
-                {...editMemberForm.register("notes")}
-                placeholder="Enter any notes about this member (optional)"
-                rows={3}
-              />
-            </div>
-
-            <DialogFooter>
-              <Button 
-                type="button"
-                variant="outline" 
-                onClick={() => {
-                  setIsEditMemberDialogOpen(false);
-                  setSelectedMember(null);
-                  editMemberForm.reset();
-                }}
-              >
-                Cancel
-              </Button>
-              <Button 
-                type="submit"
-                disabled={updateMemberMutation.isPending}
-              >
-                {updateMemberMutation.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Updating...
-                  </>
-                ) : (
-                  'Update Member'
-                )}
-              </Button>
-            </DialogFooter>
-          </form>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
     </div>

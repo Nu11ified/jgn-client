@@ -136,6 +136,23 @@ export default function DepartmentRosterPage() {
       (member.rankName?.toLowerCase().includes(searchLower)) ??
       member.teamName?.toLowerCase().includes(searchLower))
     );
+  })
+  // Sort by rank level (highest rank first, members without ranks at the bottom)
+  .sort((a, b) => {
+    // If both have ranks, sort by rank level descending
+    if (a.rankLevel !== null && b.rankLevel !== null) {
+      return b.rankLevel - a.rankLevel;
+    }
+    // If only a has a rank, a comes first
+    if (a.rankLevel !== null && b.rankLevel === null) {
+      return -1;
+    }
+    // If only b has a rank, b comes first
+    if (a.rankLevel === null && b.rankLevel !== null) {
+      return 1;
+    }
+    // If neither has a rank, maintain original order (or sort by name)
+    return (a.callsign ?? a.roleplayName ?? '').localeCompare(b.callsign ?? b.roleplayName ?? '');
   }) ?? [];
 
   const totalPages = Math.ceil((rosterData?.totalCount ?? 0) / limit);

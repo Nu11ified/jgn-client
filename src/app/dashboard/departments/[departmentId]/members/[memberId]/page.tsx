@@ -51,6 +51,7 @@ import {
   DialogTitle 
 } from "@/components/ui/dialog";
 import { formatLocalDateTime, formatLocalDate, formatDuration } from "@/lib/utils/date";
+import { useSyncNotifications } from "@/hooks/useSyncNotifications";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
 
@@ -108,6 +109,9 @@ export default function MemberDetailsPage() {
     isEditing: false,
     value: '',
   });
+
+  // Add sync notifications hook
+  const { showSyncStatus, showQuickSuccess, showQuickError } = useSyncNotifications();
 
   // Get member details using the memberIdFilter
   const { data: rosterData, isLoading: memberLoading, refetch: refetchMember } = api.dept.user.info.getDepartmentRoster.useQuery({
@@ -209,43 +213,43 @@ export default function MemberDetailsPage() {
     { enabled: !!memberData && !!(permissions?.hasPermission ?? false) }
   );
 
-  // Mutations
+  // Mutations with sync notifications
   const updateMemberMutation = api.dept.admin.members.update.useMutation({
-    onSuccess: () => {
-      toast.success("Member updated successfully");
+    onSuccess: (result) => {
+      showQuickSuccess("Member updated successfully");
       setIsEditing(false);
       setEditData({});
       void refetchMember();
     },
     onError: (error) => {
-      toast.error(`Failed to update member: ${error.message}`);
+      showQuickError(`Failed to update member: ${error.message}`);
     },
   });
 
   const promoteMutation = api.dept.user.promotions.promote.useMutation({
     onSuccess: (result) => {
-      toast.success(result.message || "Member promoted successfully");
+      showQuickSuccess(result.message || "Member promoted successfully", "Promotion completed and Discord roles updated");
       void refetchMember();
     },
     onError: (error) => {
-      toast.error(`Failed to promote member: ${error.message}`);
+      showQuickError(`Failed to promote member: ${error.message}`);
     },
   });
 
   const demoteMutation = api.dept.user.promotions.demote.useMutation({
     onSuccess: (result) => {
-      toast.success(result.message || "Member demoted successfully");
+      showQuickSuccess(result.message || "Member demoted successfully", "Demotion completed and Discord roles updated");
       void refetchMember();
     },
     onError: (error) => {
-      toast.error(`Failed to demote member: ${error.message}`);
+      showQuickError(`Failed to demote member: ${error.message}`);
     },
   });
 
   // Add disciplinary action mutation
   const disciplineIssueMutation = api.dept.user.discipline.issue.useMutation({
-    onSuccess: () => {
-      toast.success("Disciplinary action issued successfully");
+    onSuccess: (result) => {
+      showQuickSuccess("Disciplinary action issued successfully", "Action recorded and member status updated");
       void refetchMember();
       // Refetch disciplinary actions if they are being displayed
       if (permissions?.hasPermission ?? false) {
@@ -254,29 +258,29 @@ export default function MemberDetailsPage() {
       }
     },
     onError: (error) => {
-      toast.error(`Failed to issue disciplinary action: ${error.message}`);
+      showQuickError(`Failed to issue disciplinary action: ${error.message}`);
     },
   });
 
   // Add dismiss disciplinary action mutation
   const disciplineDismissMutation = api.dept.user.discipline.dismiss.useMutation({
-    onSuccess: () => {
-      toast.success("Disciplinary action dismissed successfully");
+    onSuccess: (result) => {
+      showQuickSuccess("Disciplinary action dismissed successfully", "Action dismissed and member status updated");
       void refetchMember();
     },
     onError: (error) => {
-      toast.error(`Failed to dismiss disciplinary action: ${error.message}`);
+      showQuickError(`Failed to dismiss disciplinary action: ${error.message}`);
     },
   });
 
   // Add notes update mutation
   const updateNotesMutation = api.dept.admin.members.update.useMutation({
     onSuccess: () => {
-      toast.success("Notes updated successfully");
+      showQuickSuccess("Notes updated successfully");
       void refetchMember();
     },
     onError: (error) => {
-      toast.error(`Failed to update notes: ${error.message}`);
+      showQuickError(`Failed to update notes: ${error.message}`);
     },
   });
 
@@ -1183,7 +1187,7 @@ export default function MemberDetailsPage() {
                                 if (lowestRank) {
                                   handlePromote(lowestRank.id, 'Initial rank assignment');
                                 } else {
-                                  toast.error("No ranks available in this department");
+                                  showQuickError("No ranks available in this department");
                                 }
                                 return;
                               }
@@ -1200,7 +1204,7 @@ export default function MemberDetailsPage() {
                                   handlePromote(nextRank.id, 'Quick promotion');
                                 }
                               } else {
-                                toast.info("No higher rank available for promotion");
+                                showQuickError("No higher rank available for promotion");
                               }
                             }}
                           >
@@ -1228,7 +1232,7 @@ export default function MemberDetailsPage() {
                                   handleDemote(prevRank.id, 'Quick demotion');
                                 }
                               } else {
-                                toast.info("No lower rank available for demotion");
+                                showQuickError("No lower rank available for demotion");
                               }
                             }}
                           >
@@ -1248,7 +1252,6 @@ export default function MemberDetailsPage() {
                                 id: memberId,
                                 rankId: null,
                               });
-                              toast.success("Rank removed from member");
                             }}
                           >
                             <UserX className="h-4 w-4 mr-2" />

@@ -8,18 +8,26 @@ import type { RankLimitInfo, RankLimitValidationResult } from "@/server/postgres
 import { env } from "@/env";
 import axios from "axios";
 
+// Import the new department services
+import {
+  syncMemberRolesAndCallsign,
+  syncMemberRolesAndCallsignInBackground,
+  createRankRoleChanges,
+  createTeamRoleChanges,
+  updateUserRankFromDiscordRoles,
+  updateUserTeamFromDiscordRoles,
+  manageDiscordRole,
+  getServerIdFromRoleId,
+  generateCallsign,
+  getNextAvailableIdNumber,
+  removeDiscordRolesForInactiveMember,
+  restoreDiscordRolesForActiveMember,
+  DISCORD_SYNC_FEATURE_FLAGS,
+  type RoleChangeAction,
+} from "@/server/api/services/department";
+
 const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
 const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
-
-// Feature flags for Discord sync behavior
-const DISCORD_SYNC_FEATURE_FLAGS = {
-  ENABLE_AUTO_SYNC_AFTER_ROLE_CHANGE: true,
-  SYNC_DELAY_MS: 15000, // Wait time for Discord propagation
-  ENABLE_RANK_LIMIT_VALIDATION: true,
-  ENABLE_CALLSIGN_AUTO_GENERATION: true,
-  ENABLE_DETAILED_LOGGING: true,
-  MAX_SYNC_RETRIES: 2,
-} as const;
 
 // Zod validation schemas for input validation
 const createDepartmentSchema = z.object({
@@ -106,62 +114,6 @@ const updateMemberSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-// Utility function to generate callsign
-const generateCallsign = (rankCallsign: string, departmentPrefix: string, idNumber?: number, teamPrefix?: string): string => {
-  if (!idNumber) return `${rankCallsign}${departmentPrefix}`;
-  if (teamPrefix) {
-    return `${rankCallsign}${departmentPrefix}-${idNumber}(${teamPrefix})`;
-  }
-  return `${rankCallsign}${departmentPrefix}-${idNumber}`;
-};
-
-// Utility function to get next available ID number for a department
-const getNextAvailableIdNumber = async (departmentId: number): Promise<number> => {
-  // Get the next available ID number (100-999)
-  const availableId = await postgrestDb
-    .select()
-    .from(deptSchema.departmentIdNumbers)
-    .where(
-      and(
-        eq(deptSchema.departmentIdNumbers.departmentId, departmentId),
-        eq(deptSchema.departmentIdNumbers.isAvailable, true)
-      )
-    )
-    .orderBy(asc(deptSchema.departmentIdNumbers.idNumber))
-    .limit(1);
-
-  if (availableId.length > 0) {
-    return availableId[0]!.idNumber;
-  }
-
-  // If no available ID found, create new ones if needed
-  const maxId = await postgrestDb
-    .select()
-    .from(deptSchema.departmentIdNumbers)
-    .where(eq(deptSchema.departmentIdNumbers.departmentId, departmentId))
-    .orderBy(desc(deptSchema.departmentIdNumbers.idNumber))
-    .limit(1);
-
-  let nextId = 100; // Start from 100
-  if (maxId.length > 0 && maxId[0]!.idNumber < 999) {
-    nextId = maxId[0]!.idNumber + 1;
-  } else if (maxId.length > 0 && maxId[0]!.idNumber >= 999) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: "No available ID numbers (100-999) for this department",
-    });
-  }
-
-  // Create the new ID number
-  await postgrestDb.insert(deptSchema.departmentIdNumbers).values({
-    departmentId,
-    idNumber: nextId,
-    isAvailable: true,
-  });
-
-  return nextId;
-};
-
 // Utility function to validate API key for training endpoints
 const validateApiKey = (apiKey: string): boolean => {
   const validApiKey = process.env.DEPARTMENT_TRAINING_API_KEY;
@@ -231,277 +183,6 @@ const updateTeamByDiscordIdSchema = z.object({
   discordId: z.string().min(1, "Discord ID is required"),
   departmentId: z.number().int().positive().optional(), // Optional to update all departments
 });
-
-// Utility function to call Discord role management API
-const manageDiscordRole = async (action: 'add' | 'remove', userDiscordId: string, roleId: string, serverId: string): Promise<boolean> => {
-  try {
-    console.log("🎭 manageDiscordRole called with:", { action, userDiscordId, roleId, serverId });
-    
-    if (!M2M_API_KEY) {
-      console.log("❌ No M2M_API_KEY found");
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: "M2M API key not configured",
-      });
-    }
-
-    const url = `${API_BASE_URL}/admin/discord_roles/manage`;
-    const payload = {
-      action,
-      discord_user_id: userDiscordId,
-      discord_role_id: roleId,
-      discord_server_id: serverId,
-    };
-    
-    console.log("🌐 Making role management API call to:", url);
-    console.log("📤 Payload:", payload);
-
-    const response = await axios.post(url, payload, {
-      headers: { "X-API-Key": M2M_API_KEY },
-    });
-
-    console.log("📥 Role management response status:", response.status);
-    console.log("📥 Role management response data:", response.data);
-    console.log(`✅ Discord role ${action} successful:`, response.data);
-    return true;
-  } catch (error) {
-    console.error(`❌ Discord role ${action} failed:`, error);
-    if (axios.isAxiosError(error)) {
-      console.error("❌ Axios error details:", {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        data: error.response?.data,
-        message: error.message
-      });
-    }
-    // Return false to indicate failure instead of throwing
-    return false;
-  }
-};
-
-// Utility function to get server ID from role ID
-const getServerIdFromRoleId = async (roleId: string): Promise<string | null> => {
-  try {
-    console.log("🔍 getServerIdFromRoleId called with roleId:", roleId);
-    
-    if (!M2M_API_KEY) {
-      console.log("❌ No M2M_API_KEY found");
-      return null;
-    }
-
-    const url = `${API_BASE_URL}/admin/roles/${roleId}`;
-    console.log("🌐 Making API call to:", url);
-
-    const response = await axios.get(url, {
-      headers: { "X-API-Key": M2M_API_KEY },
-    });
-
-    console.log("📥 API response status:", response.status);
-    console.log("📥 API response data:", response.data);
-
-    // Check if response.data exists and has server_id property
-    if (response.data && typeof response.data === 'object' && 'server_id' in response.data) {
-      const serverId = (response.data as { server_id: unknown }).server_id;
-      const result = typeof serverId === 'string' ? serverId : null;
-      console.log("✅ Extracted server ID:", result);
-      return result;
-    }
-    
-    console.log("❌ No server_id found in response");
-    return null;
-  } catch (error) {
-    console.error("❌ Failed to get server ID from role ID:", error);
-    if (axios.isAxiosError(error)) {
-      console.error("❌ Axios error details:", {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        data: error.response?.data,
-        message: error.message
-      });
-    }
-    return null;
-  }
-};
-
-// Utility function to update user's rank based on their current Discord roles
-const updateUserRankFromDiscordRoles = async (discordId: string, departmentId?: number): Promise<{ 
-  success: boolean; 
-  updatedDepartments: Array<{ departmentId: number; newRankId: number | null; oldRankId: number | null; }>;
-  message: string;
-}> => {
-  try {
-    console.log(`📊 updateUserRankFromDiscordRoles called for Discord ID: ${discordId}, Department: ${departmentId ?? 'all'}`);
-
-    // Get user's current Discord roles
-    let userRoles: Array<{ roleId: string; serverId: string; }> = [];
-    
-    try {
-      if (M2M_API_KEY) {
-        console.log("🔍 Fetching user Discord roles from API...");
-        const rolesResponse = await axios.get(
-          `${API_BASE_URL}/admin/user_server_roles/users/${discordId}/roles`,
-          {
-            headers: { "X-API-Key": M2M_API_KEY },
-          }
-        );
-        // Map the API response fields to our expected format
-        const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; role_name: string; }> ?? [];
-        userRoles = rawRoles.map(role => ({ 
-          roleId: role.role_id, 
-          serverId: role.server_id 
-        }));
-        console.log(`📋 Found ${userRoles.length} Discord roles for user`);
-        if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
-          console.log("🔍 User's Discord roles:", userRoles.slice(0, 5).map(r => `${r.roleId} (${r.serverId})`));
-        }
-      } else {
-        console.warn("⚠️ M2M_API_KEY not available, skipping Discord role fetch");
-      }
-    } catch (error) {
-      console.error("❌ Failed to fetch user Discord roles:", error);
-      throw new Error("Failed to fetch Discord roles from API");
-    }
-
-    // Get departments to check (either specific one or all where user is a member)
-    const departmentConditions = [eq(deptSchema.departmentMembers.discordId, discordId)];
-    if (departmentId) {
-      departmentConditions.push(eq(deptSchema.departmentMembers.departmentId, departmentId));
-    }
-
-    const memberships = await postgrestDb
-      .select({
-        departmentId: deptSchema.departmentMembers.departmentId,
-        memberId: deptSchema.departmentMembers.id,
-        currentRankId: deptSchema.departmentMembers.rankId,
-        discordGuildId: deptSchema.departments.discordGuildId,
-        memberStatus: deptSchema.departmentMembers.status,
-        isActive: deptSchema.departmentMembers.isActive,
-      })
-      .from(deptSchema.departmentMembers)
-      .innerJoin(deptSchema.departments, eq(deptSchema.departmentMembers.departmentId, deptSchema.departments.id))
-      .where(and(...departmentConditions, eq(deptSchema.departmentMembers.isActive, true)));
-
-    console.log(`🏢 Found ${memberships.length} active department membership(s) for user`);
-
-    if (memberships.length === 0) {
-      return {
-        success: true,
-        updatedDepartments: [],
-        message: "User has no active department memberships",
-      };
-    }
-
-    const updatedDepartments: Array<{ departmentId: number; newRankId: number | null; oldRankId: number | null; }> = [];
-
-    for (const membership of memberships) {
-      console.log(`🏛️ Processing department ${membership.departmentId} (Guild: ${membership.discordGuildId})`);
-
-      // Get all ranks for this department with their Discord role IDs
-      const departmentRanks = await postgrestDb
-        .select({
-          id: deptSchema.departmentRanks.id,
-          discordRoleId: deptSchema.departmentRanks.discordRoleId,
-          level: deptSchema.departmentRanks.level,
-          name: deptSchema.departmentRanks.name,
-        })
-        .from(deptSchema.departmentRanks)
-        .where(
-          and(
-            eq(deptSchema.departmentRanks.departmentId, membership.departmentId),
-            eq(deptSchema.departmentRanks.isActive, true),
-            isNotNull(deptSchema.departmentRanks.discordRoleId)
-          )
-        )
-        .orderBy(asc(deptSchema.departmentRanks.level)); // Lowest level first
-
-      console.log(`📊 Found ${departmentRanks.length} active ranks with Discord roles for department ${membership.departmentId}`);
-
-      // Find the lowest rank the user has based on their Discord roles
-      let newRankId: number | null = null;
-      let lowestRankFound: { id: number; name: string; level: number; } | null = null;
-      
-      for (const rank of departmentRanks) {
-        if (!rank.discordRoleId) continue;
-        
-        const hasRole = userRoles.some(
-          userRole => userRole.roleId === rank.discordRoleId && userRole.serverId === membership.discordGuildId
-        );
-        
-        console.log(`🎭 Checking rank "${rank.name}" (Level ${rank.level}, Role: ${rank.discordRoleId}): ${hasRole ? 'HAS ROLE' : 'NO ROLE'}`);
-        
-        if (hasRole) {
-          newRankId = rank.id;
-          lowestRankFound = { id: rank.id, name: rank.name, level: rank.level };
-          break; // Take the lowest level rank they have
-        }
-
-        if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING && !hasRole) {
-          const userRolesInGuild = userRoles.filter(r => r.serverId === membership.discordGuildId);
-          console.log(`   👀 User has ${userRolesInGuild.length} roles in guild ${membership.discordGuildId}:`, 
-            userRolesInGuild.map(r => r.roleId).slice(0, 3));
-          console.log(`   🎯 Looking for role: ${rank.discordRoleId}`);
-        }
-      }
-
-      if (lowestRankFound) {
-        console.log(`🎯 Lowest rank found: "${lowestRankFound.name}" (Level ${lowestRankFound.level})`);
-      } else {
-        console.log("❌ No matching rank roles found for user in this department");
-      }
-
-      // Update rank if it has changed
-      if (newRankId !== membership.currentRankId) {
-        console.log(`🔄 Rank change detected: ${membership.currentRankId} → ${newRankId}`);
-
-        try {
-          // Update the database immediately
-          await postgrestDb
-            .update(deptSchema.departmentMembers)
-            .set({ 
-              rankId: newRankId,
-              lastActiveDate: new Date(),
-            })
-            .where(eq(deptSchema.departmentMembers.id, membership.memberId));
-
-          updatedDepartments.push({
-            departmentId: membership.departmentId,
-            newRankId,
-            oldRankId: membership.currentRankId,
-          });
-
-          console.log(`✅ Successfully updated rank in database for department ${membership.departmentId}`);
-
-        } catch (updateError) {
-          console.error(`❌ Failed to update rank in database for department ${membership.departmentId}:`, updateError);
-          throw updateError;
-        }
-      } else {
-        console.log(`✅ No rank change needed for department ${membership.departmentId}`);
-      }
-    }
-
-    const message = updatedDepartments.length > 0 
-      ? `Updated ranks in ${updatedDepartments.length} department(s): ${updatedDepartments.map(d => `Dept ${d.departmentId} (${d.oldRankId} → ${d.newRankId})`).join(', ')}`
-      : "No rank changes needed - all ranks are in sync";
-
-    console.log(`🎉 updateUserRankFromDiscordRoles completed: ${message}`);
-
-    return {
-      success: true,
-      updatedDepartments,
-      message,
-    };
-  } catch (error) {
-    console.error("💥 Failed to update user rank from Discord roles:", error);
-    return {
-      success: false,
-      updatedDepartments: [],
-      message: `Failed to update ranks from Discord roles: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    };
-  }
-};
 
 // Utility function to validate rank limits before promotion
 const validateRankLimit = async (
@@ -728,516 +409,6 @@ function assertCanActOnMember({ actorDiscordId, actorRankLevel, targetDiscordId,
     });
   }
 }
-
-// Utility function to update user's team based on their current Discord roles
-const updateUserTeamFromDiscordRoles = async (discordId: string, departmentId?: number): Promise<{ 
-  success: boolean; 
-  updatedDepartments: Array<{ departmentId: number; newTeamId: number | null; oldTeamId: number | null; }>;
-  message: string;
-}> => {
-  try {
-    console.log(`🏢 updateUserTeamFromDiscordRoles called for Discord ID: ${discordId}, Department: ${departmentId ?? 'all'}`);
-
-    // Get user's current Discord roles
-    let userRoles: Array<{ roleId: string; serverId: string; }> = [];
-    
-    try {
-      if (M2M_API_KEY) {
-        console.log("🔍 Fetching user Discord roles from API...");
-        const rolesResponse = await axios.get(
-          `${API_BASE_URL}/admin/user_server_roles/users/${discordId}/roles`,
-          {
-            headers: { "X-API-Key": M2M_API_KEY },
-          }
-        );
-        // Map the API response fields to our expected format
-        const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; role_name: string; }> ?? [];
-        userRoles = rawRoles.map(role => ({ 
-          roleId: role.role_id, 
-          serverId: role.server_id 
-        }));
-        console.log(`📋 Found ${userRoles.length} Discord roles for user`);
-        if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
-          console.log("🔍 User's Discord roles:", userRoles.slice(0, 5).map(r => `${r.roleId} (${r.serverId})`));
-        }
-      } else {
-        console.warn("⚠️ M2M_API_KEY not available, skipping Discord role fetch");
-      }
-    } catch (error) {
-      console.error("❌ Failed to fetch user Discord roles:", error);
-      throw new Error("Failed to fetch Discord roles from API");
-    }
-
-    // Get departments to check (either specific one or all where user is a member)
-    const departmentConditions = [eq(deptSchema.departmentMembers.discordId, discordId)];
-    if (departmentId) {
-      departmentConditions.push(eq(deptSchema.departmentMembers.departmentId, departmentId));
-    }
-
-    const memberships = await postgrestDb
-      .select({
-        departmentId: deptSchema.departmentMembers.departmentId,
-        memberId: deptSchema.departmentMembers.id,
-        currentTeamId: deptSchema.departmentMembers.primaryTeamId,
-        discordGuildId: deptSchema.departments.discordGuildId,
-        memberStatus: deptSchema.departmentMembers.status,
-        isActive: deptSchema.departmentMembers.isActive,
-      })
-      .from(deptSchema.departmentMembers)
-      .innerJoin(deptSchema.departments, eq(deptSchema.departmentMembers.departmentId, deptSchema.departments.id))
-      .where(and(...departmentConditions, eq(deptSchema.departmentMembers.isActive, true)));
-
-    console.log(`🏢 Found ${memberships.length} active department membership(s) for user`);
-
-    if (memberships.length === 0) {
-      return {
-        success: true,
-        updatedDepartments: [],
-        message: "User has no active department memberships",
-      };
-    }
-
-    const updatedDepartments: Array<{ departmentId: number; newTeamId: number | null; oldTeamId: number | null; }> = [];
-
-    for (const membership of memberships) {
-      console.log(`🏛️ Processing department ${membership.departmentId} (Guild: ${membership.discordGuildId})`);
-
-      // Get all teams for this department with their Discord role IDs
-      const departmentTeams = await postgrestDb
-        .select({
-          id: deptSchema.departmentTeams.id,
-          discordRoleId: deptSchema.departmentTeams.discordRoleId,
-          name: deptSchema.departmentTeams.name,
-        })
-        .from(deptSchema.departmentTeams)
-        .where(
-          and(
-            eq(deptSchema.departmentTeams.departmentId, membership.departmentId),
-            eq(deptSchema.departmentTeams.isActive, true),
-            isNotNull(deptSchema.departmentTeams.discordRoleId)
-          )
-        );
-
-      console.log(`👥 Found ${departmentTeams.length} active teams with Discord roles for department ${membership.departmentId}`);
-
-      // Find team the user has based on their Discord roles (take first match)
-      let newTeamId: number | null = null;
-      let teamFound: { id: number; name: string; } | null = null;
-      
-      for (const team of departmentTeams) {
-        if (!team.discordRoleId) continue;
-        
-        const hasRole = userRoles.some(
-          userRole => userRole.roleId === team.discordRoleId && userRole.serverId === membership.discordGuildId
-        );
-        
-        console.log(`👥 Checking team "${team.name}" (Role: ${team.discordRoleId}): ${hasRole ? 'HAS ROLE' : 'NO ROLE'}`);
-        
-        if (hasRole) {
-          newTeamId = team.id;
-          teamFound = { id: team.id, name: team.name };
-          break; // Take the first team role they have
-        }
-      }
-
-      if (teamFound) {
-        console.log(`🎯 Team found: "${teamFound.name}"`);
-      } else {
-        console.log("❌ No matching team roles found for user in this department");
-      }
-
-      // Update team if it has changed
-      if (newTeamId !== membership.currentTeamId) {
-        console.log(`🔄 Team change detected: ${membership.currentTeamId} → ${newTeamId}`);
-
-        try {
-          // Update the primary team assignment immediately
-          await postgrestDb
-            .update(deptSchema.departmentMembers)
-            .set({ 
-              primaryTeamId: newTeamId,
-              lastActiveDate: new Date(),
-            })
-            .where(eq(deptSchema.departmentMembers.id, membership.memberId));
-
-          // Handle team membership records
-          if (newTeamId) {
-            // Add to new team membership if not already exists
-            const existingMembership = await postgrestDb
-              .select()
-              .from(deptSchema.departmentTeamMemberships)
-              .where(
-                and(
-                  eq(deptSchema.departmentTeamMemberships.memberId, membership.memberId),
-                  eq(deptSchema.departmentTeamMemberships.teamId, newTeamId)
-                )
-              )
-              .limit(1);
-
-            if (existingMembership.length === 0) {
-              await postgrestDb
-                .insert(deptSchema.departmentTeamMemberships)
-                .values({
-                  memberId: membership.memberId,
-                  teamId: newTeamId,
-                  isLeader: false,
-                });
-              console.log(`✅ Added team membership record for team ${newTeamId}`);
-            }
-          }
-
-          // Remove old team memberships if user left teams
-          if (membership.currentTeamId && membership.currentTeamId !== newTeamId) {
-            await postgrestDb
-              .delete(deptSchema.departmentTeamMemberships)
-              .where(
-                and(
-                  eq(deptSchema.departmentTeamMemberships.memberId, membership.memberId),
-                  eq(deptSchema.departmentTeamMemberships.teamId, membership.currentTeamId)
-                )
-              );
-            console.log(`🗑️ Removed old team membership record for team ${membership.currentTeamId}`);
-          }
-
-          updatedDepartments.push({
-            departmentId: membership.departmentId,
-            newTeamId,
-            oldTeamId: membership.currentTeamId,
-          });
-
-          console.log(`✅ Successfully updated team in database for department ${membership.departmentId}`);
-
-        } catch (updateError) {
-          console.error(`❌ Failed to update team in database for department ${membership.departmentId}:`, updateError);
-          throw updateError;
-        }
-      } else {
-        console.log(`✅ No team change needed for department ${membership.departmentId}`);
-      }
-    }
-
-    const message = updatedDepartments.length > 0 
-      ? `Updated teams in ${updatedDepartments.length} department(s): ${updatedDepartments.map(d => `Dept ${d.departmentId} (${d.oldTeamId} → ${d.newTeamId})`).join(', ')}`
-      : "No team changes needed - all teams are in sync";
-
-    console.log(`🎉 updateUserTeamFromDiscordRoles completed: ${message}`);
-
-    return {
-      success: true,
-      updatedDepartments,
-      message,
-    };
-  } catch (error) {
-    console.error("💥 Failed to update user team from Discord roles:", error);
-    return {
-      success: false,
-      updatedDepartments: [],
-      message: `Failed to update teams from Discord roles: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    };
-  }
-};
-
-// Utility function to remove Discord roles for members with non-active status
-const removeDiscordRolesForInactiveMember = async (discordId: string, departmentId: number): Promise<{ 
-  success: boolean; 
-  message: string;
-  removedRoles: Array<{ type: 'rank' | 'team'; roleId: string; }>;
-}> => {
-  try {
-    console.log("🗑️ removeDiscordRolesForInactiveMember called with:", { discordId, departmentId });
-    
-    const removedRoles: Array<{ type: 'rank' | 'team'; roleId: string; }> = [];
-
-    // Get member's current rank and team information
-    const memberInfo = await postgrestDb
-      .select({
-        rankId: deptSchema.departmentMembers.rankId,
-        primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
-        discordGuildId: deptSchema.departments.discordGuildId,
-      })
-      .from(deptSchema.departmentMembers)
-      .innerJoin(deptSchema.departments, eq(deptSchema.departmentMembers.departmentId, deptSchema.departments.id))
-      .where(
-        and(
-          eq(deptSchema.departmentMembers.discordId, discordId),
-          eq(deptSchema.departmentMembers.departmentId, departmentId)
-        )
-      )
-      .limit(1);
-
-    if (memberInfo.length === 0) {
-      return {
-        success: false,
-        message: "Member not found",
-        removedRoles: [],
-      };
-    }
-
-    const member = memberInfo[0]!;
-
-    // Remove rank Discord role if member has one
-    if (member.rankId) {
-      const rankInfo = await postgrestDb
-        .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
-        .from(deptSchema.departmentRanks)
-        .where(eq(deptSchema.departmentRanks.id, member.rankId))
-        .limit(1);
-
-      if (rankInfo.length > 0 && rankInfo[0]!.discordRoleId) {
-        const serverId = await getServerIdFromRoleId(rankInfo[0]!.discordRoleId);
-        if (serverId) {
-          const roleRemoved = await manageDiscordRole(
-            'remove',
-            discordId,
-            rankInfo[0]!.discordRoleId,
-            serverId
-          );
-          
-          if (roleRemoved) {
-            removedRoles.push({ type: 'rank', roleId: rankInfo[0]!.discordRoleId });
-            console.log("✅ Removed rank Discord role:", rankInfo[0]!.discordRoleId);
-          } else {
-            console.log("❌ Failed to remove rank Discord role:", rankInfo[0]!.discordRoleId);
-          }
-        }
-      }
-    }
-
-    // Remove primary team Discord role if member has one
-    if (member.primaryTeamId) {
-      const teamInfo = await postgrestDb
-        .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
-        .from(deptSchema.departmentTeams)
-        .where(eq(deptSchema.departmentTeams.id, member.primaryTeamId))
-        .limit(1);
-
-      if (teamInfo.length > 0 && teamInfo[0]!.discordRoleId) {
-        const serverId = await getServerIdFromRoleId(teamInfo[0]!.discordRoleId);
-        if (serverId) {
-          const roleRemoved = await manageDiscordRole(
-            'remove',
-            discordId,
-            teamInfo[0]!.discordRoleId,
-            serverId
-          );
-          
-          if (roleRemoved) {
-            removedRoles.push({ type: 'team', roleId: teamInfo[0]!.discordRoleId });
-            console.log("✅ Removed team Discord role:", teamInfo[0]!.discordRoleId);
-          } else {
-            console.log("❌ Failed to remove team Discord role:", teamInfo[0]!.discordRoleId);
-          }
-        }
-      }
-    }
-
-    // Remove additional team memberships (not just primary team)
-    const additionalTeams = await postgrestDb
-      .select({
-        teamId: deptSchema.departmentTeamMemberships.teamId,
-        discordRoleId: deptSchema.departmentTeams.discordRoleId,
-      })
-      .from(deptSchema.departmentTeamMemberships)
-      .innerJoin(deptSchema.departmentTeams, eq(deptSchema.departmentTeamMemberships.teamId, deptSchema.departmentTeams.id))
-      .innerJoin(deptSchema.departmentMembers, eq(deptSchema.departmentTeamMemberships.memberId, deptSchema.departmentMembers.id))
-      .where(
-        and(
-          eq(deptSchema.departmentMembers.discordId, discordId),
-          eq(deptSchema.departmentTeams.departmentId, departmentId),
-          isNotNull(deptSchema.departmentTeams.discordRoleId)
-        )
-      );
-
-    for (const team of additionalTeams) {
-      if (team.discordRoleId && team.teamId !== member.primaryTeamId) {
-        const serverId = await getServerIdFromRoleId(team.discordRoleId);
-        if (serverId) {
-          const roleRemoved = await manageDiscordRole(
-            'remove',
-            discordId,
-            team.discordRoleId,
-            serverId
-          );
-          
-          if (roleRemoved) {
-            removedRoles.push({ type: 'team', roleId: team.discordRoleId });
-            console.log("✅ Removed additional team Discord role:", team.discordRoleId);
-          } else {
-            console.log("❌ Failed to remove additional team Discord role:", team.discordRoleId);
-          }
-        }
-      }
-    }
-
-    const message = removedRoles.length > 0 
-      ? `Removed ${removedRoles.length} Discord role(s) for inactive member`
-      : "No Discord roles to remove";
-
-    return {
-      success: true,
-      message,
-      removedRoles,
-    };
-  } catch (error) {
-    console.error("❌ Failed to remove Discord roles for inactive member:", error);
-    return {
-      success: false,
-      message: "Failed to remove Discord roles",
-      removedRoles: [],
-    };
-  }
-};
-
-// Utility function to restore Discord roles for members returning to active status
-const restoreDiscordRolesForActiveMember = async (discordId: string, departmentId: number): Promise<{ 
-  success: boolean; 
-  message: string;
-  addedRoles: Array<{ type: 'rank' | 'team'; roleId: string; }>;
-}> => {
-  try {
-    console.log("➕ restoreDiscordRolesForActiveMember called with:", { discordId, departmentId });
-    
-    const addedRoles: Array<{ type: 'rank' | 'team'; roleId: string; }> = [];
-
-    // Get member's current rank and team information
-    const memberInfo = await postgrestDb
-      .select({
-        rankId: deptSchema.departmentMembers.rankId,
-        primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
-        discordGuildId: deptSchema.departments.discordGuildId,
-      })
-      .from(deptSchema.departmentMembers)
-      .innerJoin(deptSchema.departments, eq(deptSchema.departmentMembers.departmentId, deptSchema.departments.id))
-      .where(
-        and(
-          eq(deptSchema.departmentMembers.discordId, discordId),
-          eq(deptSchema.departmentMembers.departmentId, departmentId)
-        )
-      )
-      .limit(1);
-
-    if (memberInfo.length === 0) {
-      return {
-        success: false,
-        message: "Member not found",
-        addedRoles: [],
-      };
-    }
-
-    const member = memberInfo[0]!;
-
-    // Add rank Discord role if member has one
-    if (member.rankId) {
-      const rankInfo = await postgrestDb
-        .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
-        .from(deptSchema.departmentRanks)
-        .where(eq(deptSchema.departmentRanks.id, member.rankId))
-        .limit(1);
-
-      if (rankInfo.length > 0 && rankInfo[0]!.discordRoleId) {
-        const serverId = await getServerIdFromRoleId(rankInfo[0]!.discordRoleId);
-        if (serverId) {
-          const roleAdded = await manageDiscordRole(
-            'add',
-            discordId,
-            rankInfo[0]!.discordRoleId,
-            serverId
-          );
-          
-          if (roleAdded) {
-            addedRoles.push({ type: 'rank', roleId: rankInfo[0]!.discordRoleId });
-            console.log("✅ Added rank Discord role:", rankInfo[0]!.discordRoleId);
-          } else {
-            console.log("❌ Failed to add rank Discord role:", rankInfo[0]!.discordRoleId);
-          }
-        }
-      }
-    }
-
-    // Add primary team Discord role if member has one
-    if (member.primaryTeamId) {
-      const teamInfo = await postgrestDb
-        .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
-        .from(deptSchema.departmentTeams)
-        .where(eq(deptSchema.departmentTeams.id, member.primaryTeamId))
-        .limit(1);
-
-      if (teamInfo.length > 0 && teamInfo[0]!.discordRoleId) {
-        const serverId = await getServerIdFromRoleId(teamInfo[0]!.discordRoleId);
-        if (serverId) {
-          const roleAdded = await manageDiscordRole(
-            'add',
-            discordId,
-            teamInfo[0]!.discordRoleId,
-            serverId
-          );
-          
-          if (roleAdded) {
-            addedRoles.push({ type: 'team', roleId: teamInfo[0]!.discordRoleId });
-            console.log("✅ Added team Discord role:", teamInfo[0]!.discordRoleId);
-          } else {
-            console.log("❌ Failed to add team Discord role:", teamInfo[0]!.discordRoleId);
-          }
-        }
-      }
-    }
-
-    // Add additional team memberships (not just primary team)
-    const additionalTeams = await postgrestDb
-      .select({
-        teamId: deptSchema.departmentTeamMemberships.teamId,
-        discordRoleId: deptSchema.departmentTeams.discordRoleId,
-      })
-      .from(deptSchema.departmentTeamMemberships)
-      .innerJoin(deptSchema.departmentTeams, eq(deptSchema.departmentTeamMemberships.teamId, deptSchema.departmentTeams.id))
-      .innerJoin(deptSchema.departmentMembers, eq(deptSchema.departmentTeamMemberships.memberId, deptSchema.departmentMembers.id))
-      .where(
-        and(
-          eq(deptSchema.departmentMembers.discordId, discordId),
-          eq(deptSchema.departmentTeams.departmentId, departmentId),
-          isNotNull(deptSchema.departmentTeams.discordRoleId)
-        )
-      );
-
-    for (const team of additionalTeams) {
-      if (team.discordRoleId && team.teamId !== member.primaryTeamId) {
-        const serverId = await getServerIdFromRoleId(team.discordRoleId);
-        if (serverId) {
-          const roleAdded = await manageDiscordRole(
-            'add',
-            discordId,
-            team.discordRoleId,
-            serverId
-          );
-          
-          if (roleAdded) {
-            addedRoles.push({ type: 'team', roleId: team.discordRoleId });
-            console.log("✅ Added additional team Discord role:", team.discordRoleId);
-          } else {
-            console.log("❌ Failed to add additional team Discord role:", team.discordRoleId);
-          }
-        }
-      }
-    }
-
-    const message = addedRoles.length > 0 
-      ? `Added ${addedRoles.length} Discord role(s) for active member`
-      : "No Discord roles to add";
-
-    return {
-      success: true,
-      message,
-      addedRoles,
-    };
-  } catch (error) {
-    console.error("❌ Failed to restore Discord roles for active member:", error);
-    return {
-      success: false,
-      message: "Failed to restore Discord roles",
-      addedRoles: [],
-    };
-  }
-};
 
 export const deptRouter = createTRPCRouter({
   // Organize routes using CRUD structure following tRPC best practices
@@ -2362,23 +1533,22 @@ export const deptRouter = createTRPCRouter({
               console.warn('Discord team role sync had issues:', teamUpdateResult);
             }
 
+            // Fire-and-forget background sync for callsign
+            void syncMemberRolesAndCallsignInBackground(
+              memberData.discordId,
+              memberData.departmentId,
+              memberData.id
+            );
+
             // Add team membership record with leadership flag
             const result = await postgrestDb
-              .insert(deptSchema.departmentTeamMemberships)
-              .values({
-                memberId: input.memberId,
-                teamId: input.teamId,
-                isLeader: input.isLeader,
+              .update(deptSchema.departmentMembers)
+              .set({
+                status: "active",
+                lastActiveDate: new Date(),
               })
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
               .returning();
-
-            // If member doesn't have a primary team, set this as their primary team
-            if (!memberData.primaryTeamId) {
-              await postgrestDb
-                .update(deptSchema.departmentMembers)
-                .set({ primaryTeamId: input.teamId })
-                .where(eq(deptSchema.departmentMembers.id, input.memberId));
-            }
 
             return {
               success: true,
@@ -2446,27 +1616,22 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // First, remove Discord role if team has one
-            if (membershipData.teamDiscordRoleId) {
-              const serverId = await getServerIdFromRoleId(membershipData.teamDiscordRoleId);
-              if (serverId) {
-                await manageDiscordRole(
-                  'remove',
-                  membershipData.discordId,
-                  membershipData.teamDiscordRoleId,
-                  serverId
-                );
-              }
-            }
-
-            // Wait a moment for Discord role changes to propagate
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            // Now sync the database based on actual Discord roles
-            const teamUpdateResult = await updateUserTeamFromDiscordRoles(membershipData.discordId, membershipData.departmentId);
+            // Use the new centralized sync function to handle Discord role changes and database sync
+            const roleChanges = await createTeamRoleChanges(input.teamId, null, membershipData.departmentId);
             
-            if (!teamUpdateResult.success) {
-              console.warn('Discord team role sync had issues:', teamUpdateResult);
+            const syncResult = await syncMemberRolesAndCallsign({
+              discordId: membershipData.discordId,
+              departmentId: membershipData.departmentId,
+              memberId: input.memberId,
+              roleChanges,
+              skipRoleManagement: false,
+            });
+
+            if (!syncResult.success) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: `Failed to remove team role: ${syncResult.message}`,
+              });
             }
 
             // Remove team membership record
@@ -2667,139 +1832,12 @@ export const deptRouter = createTRPCRouter({
 
             const departmentData = department[0]!;
 
-            // STEP 1: Assign Discord roles FIRST if rank or team provided
-            let assignedRankRole = false;
-            let assignedTeamRole = false;
-            let rankData = null;
-            let teamData = null;
-
-            console.log("=== MEMBER CREATION DEBUG ===");
-            console.log("Input:", { discordId: input.discordId, rankId: input.rankId, primaryTeamId: input.primaryTeamId });
-            console.log("API_BASE_URL:", API_BASE_URL);
-            console.log("M2M_API_KEY exists:", !!M2M_API_KEY);
-
-            if (input.rankId) {
-              console.log("Processing rank assignment for rankId:", input.rankId);
-              // Get rank and assign Discord role
-              const rank = await postgrestDb
-                .select()
-                .from(deptSchema.departmentRanks)
-                .where(eq(deptSchema.departmentRanks.id, input.rankId))
-                .limit(1);
-
-              console.log("Found rank data:", rank);
-
-              if (rank.length > 0) {
-                rankData = rank[0]!;
-                console.log("Rank Discord Role ID:", rankData.discordRoleId);
-                
-                if (rankData.discordRoleId) {
-                  try {
-                    console.log("Getting server ID for role:", rankData.discordRoleId);
-                    const serverId = await getServerIdFromRoleId(rankData.discordRoleId);
-                    console.log("Retrieved server ID:", serverId);
-                    
-                    if (serverId) {
-                      console.log("Attempting to assign Discord role:", {
-                        action: 'add',
-                        userDiscordId: input.discordId,
-                        roleId: rankData.discordRoleId,
-                        serverId
-                      });
-                      
-                      const roleAssigned = await manageDiscordRole(
-                        'add',
-                        input.discordId,
-                        rankData.discordRoleId,
-                        serverId
-                      );
-                      
-                      if (roleAssigned) {
-                        assignedRankRole = true;
-                        console.log("✅ Successfully assigned rank Discord role");
-                      } else {
-                        console.log("❌ Failed to assign rank Discord role");
-                      }
-                    } else {
-                      console.log("❌ No server ID found, cannot assign rank role");
-                    }
-                  } catch (error) {
-                    console.error("❌ Failed to assign rank Discord role:", error);
-                    // Continue without throwing - role assignment is not critical for member creation
-                  }
-                } else {
-                  console.log("❌ Rank has no Discord role ID configured");
-                }
-              } else {
-                console.log("❌ No rank found with ID:", input.rankId);
-              }
-            }
-
-            if (input.primaryTeamId) {
-              console.log("Processing team assignment for teamId:", input.primaryTeamId);
-              // Get team and assign Discord role
-              const team = await postgrestDb
-                .select()
-                .from(deptSchema.departmentTeams)
-                .where(eq(deptSchema.departmentTeams.id, input.primaryTeamId))
-                .limit(1);
-
-              console.log("Found team data:", team);
-
-              if (team.length > 0) {
-                teamData = team[0]!;
-                console.log("Team Discord Role ID:", teamData.discordRoleId);
-                
-                if (teamData.discordRoleId) {
-                  try {
-                    console.log("Getting server ID for team role:", teamData.discordRoleId);
-                    const serverId = await getServerIdFromRoleId(teamData.discordRoleId);
-                    console.log("Retrieved server ID for team:", serverId);
-                    
-                    if (serverId) {
-                      console.log("Attempting to assign team Discord role:", {
-                        action: 'add',
-                        userDiscordId: input.discordId,
-                        roleId: teamData.discordRoleId,
-                        serverId
-                      });
-                      
-                      const roleAssigned = await manageDiscordRole(
-                        'add',
-                        input.discordId,
-                        teamData.discordRoleId,
-                        serverId
-                      );
-                      
-                      if (roleAssigned) {
-                        assignedTeamRole = true;
-                        console.log("✅ Successfully assigned team Discord role");
-                      } else {
-                        console.log("❌ Failed to assign team Discord role");
-                      }
-                    } else {
-                      console.log("❌ No server ID found, cannot assign team role");
-                    }
-                  } catch (error) {
-                    console.error("❌ Failed to assign team Discord role:", error);
-                    // Continue without throwing - role assignment is not critical for member creation
-                  }
-                } else {
-                  console.log("❌ Team has no Discord role ID configured");
-                }
-              } else {
-                console.log("❌ No team found with ID:", input.primaryTeamId);
-              }
-            }
-
-            // STEP 2: Create member in database with the provided rank and team
+            // STEP 1: Create member in database first
             // Get next available ID number
             const departmentIdNumber = await getNextAvailableIdNumber(input.departmentId);
 
-            // Generate callsign based on rank and team if available
-            const rankCallsign = rankData?.callsign ?? "0";
-            const teamPrefix = teamData?.callsignPrefix ?? undefined;
-            const basicCallsign = generateCallsign(rankCallsign, departmentData.callsignPrefix, departmentIdNumber, teamPrefix);
+            // Generate basic callsign (will be updated after sync if needed)
+            const basicCallsign = generateCallsign("0", departmentData.callsignPrefix, departmentIdNumber);
 
             const result = await postgrestDb
               .insert(deptSchema.departmentMembers)
@@ -2831,78 +1869,7 @@ export const deptRouter = createTRPCRouter({
 
             const createdMember = result[0]!;
 
-            // STEP 3: If Discord roles were assigned, run sync functions to verify and update database
-            const syncResults = {
-              rankSync: null as unknown,
-              teamSync: null as unknown,
-            };
-
-            console.log("=== SYNC FUNCTIONS DEBUG ===");
-            console.log("assignedRankRole:", assignedRankRole);
-            console.log("assignedTeamRole:", assignedTeamRole);
-
-            // Only run sync functions if we want to verify role assignment
-            // For new member creation, we trust that the role assignment worked
-            // and skip the immediate sync to avoid timing issues
-            const shouldSync = false; // Set to true if you want to verify roles were actually assigned
-
-            if (shouldSync && assignedRankRole) {
-              console.log("Running rank sync for user:", input.discordId);
-              // Add longer delay to allow Discord roles to propagate
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              
-              try {
-                syncResults.rankSync = await updateUserRankFromDiscordRoles(input.discordId, input.departmentId);
-                console.log("Rank sync result:", syncResults.rankSync);
-              } catch (error) {
-                console.error("❌ Failed to sync rank after creation:", error);
-                syncResults.rankSync = {
-                  success: false,
-                  updatedDepartments: [],
-                  message: "Failed to sync rank from Discord roles"
-                };
-              }
-            } else {
-              console.log("Skipping rank sync - trusting role assignment worked or role assignment failed");
-              if (assignedRankRole) {
-                syncResults.rankSync = {
-                  success: true,
-                  updatedDepartments: [{ departmentId: input.departmentId, newRankId: input.rankId, oldRankId: null }],
-                  message: "Rank assigned via Discord API"
-                };
-              }
-            }
-
-            if (shouldSync && assignedTeamRole) {
-              console.log("Running team sync for user:", input.discordId);
-              // Add longer delay to allow Discord roles to propagate
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              
-              try {
-                syncResults.teamSync = await updateUserTeamFromDiscordRoles(input.discordId, input.departmentId);
-                console.log("Team sync result:", syncResults.teamSync);
-              } catch (error) {
-                console.error("❌ Failed to sync team after creation:", error);
-                syncResults.teamSync = {
-                  success: false,
-                  updatedDepartments: [],
-                  message: "Failed to sync team from Discord roles"
-                };
-              }
-            } else {
-              console.log("Skipping team sync - trusting role assignment worked or role assignment failed");
-              if (assignedTeamRole) {
-                syncResults.teamSync = {
-                  success: true,
-                  updatedDepartments: [{ departmentId: input.departmentId, newTeamId: input.primaryTeamId, oldTeamId: null }],
-                  message: "Team assigned via Discord API"
-                };
-              }
-            }
-
-            console.log("Final sync results:", syncResults);
-
-            // STEP 4: If team was assigned, add team membership
+            // STEP 2: If team was assigned, add team membership
             if (input.primaryTeamId) {
               try {
                 const existingMembership = await postgrestDb
@@ -2930,7 +1897,41 @@ export const deptRouter = createTRPCRouter({
               }
             }
 
-            // STEP 5: Fetch the final updated member data
+            // STEP 3: Use centralized sync service to assign Discord roles and sync database
+            let syncResult = null;
+            
+            if (input.rankId || input.primaryTeamId) {
+              console.log("🔄 Assigning Discord roles and syncing for new member");
+              
+              // Create role changes for initial assignment
+              const roleChanges: RoleChangeAction[] = [];
+              
+              if (input.rankId) {
+                const rankRoleChanges = await createRankRoleChanges(null, input.rankId, input.departmentId);
+                roleChanges.push(...rankRoleChanges);
+              }
+              
+              if (input.primaryTeamId) {
+                const teamRoleChanges = await createTeamRoleChanges(null, input.primaryTeamId, input.departmentId);
+                roleChanges.push(...teamRoleChanges);
+              }
+
+              if (roleChanges.length > 0) {
+                syncResult = await syncMemberRolesAndCallsign({
+                  discordId: input.discordId,
+                  departmentId: input.departmentId,
+                  memberId: createdMember.id,
+                  roleChanges,
+                  skipRoleManagement: false,
+                });
+
+                if (!syncResult.success) {
+                  console.warn(`⚠️ Member creation sync had issues: ${syncResult.message}`);
+                }
+              }
+            }
+
+            // STEP 4: Fetch the final updated member data
             const finalMember = await postgrestDb
               .select()
               .from(deptSchema.departmentMembers)
@@ -2940,7 +1941,7 @@ export const deptRouter = createTRPCRouter({
             return {
               ...createdMember,
               ...(finalMember.length > 0 ? finalMember[0] : {}),
-              syncResults,
+              syncResult,
             };
           } catch (error) {
             if (error instanceof TRPCError) throw error;
@@ -3040,107 +2041,39 @@ export const deptRouter = createTRPCRouter({
             }
 
 
-            // Handle rank changes through Discord roles first
+            // Handle rank and team changes through the centralized sync service
+            const roleChanges: RoleChangeAction[] = [];
+            
             if (updateData.rankId !== undefined && updateData.rankId !== currentMember.rankId) {
-              // Remove old rank Discord role if member had one
-              if (currentMember.rankId) {
-                const oldRank = await postgrestDb
-                  .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
-                  .from(deptSchema.departmentRanks)
-                  .where(eq(deptSchema.departmentRanks.id, currentMember.rankId))
-                  .limit(1);
-
-                if (oldRank.length > 0 && oldRank[0]!.discordRoleId) {
-                  const serverId = await getServerIdFromRoleId(oldRank[0]!.discordRoleId);
-                  if (serverId) {
-                    await manageDiscordRole(
-                      'remove',
-                      currentMember.discordId,
-                      oldRank[0]!.discordRoleId,
-                      serverId
-                    );
-                  }
-                }
-              }
-
-              // Add new rank Discord role if new rank has one
-              if (updateData.rankId) {
-                const newRank = await postgrestDb
-                  .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
-                  .from(deptSchema.departmentRanks)
-                  .where(eq(deptSchema.departmentRanks.id, updateData.rankId))
-                  .limit(1);
-
-                if (newRank.length > 0 && newRank[0]!.discordRoleId) {
-                  const serverId = await getServerIdFromRoleId(newRank[0]!.discordRoleId);
-                  if (serverId) {
-                    await manageDiscordRole(
-                      'add',
-                      currentMember.discordId,
-                      newRank[0]!.discordRoleId,
-                      serverId
-                    );
-                  }
-                }
-              }
+              const rankRoleChanges = await createRankRoleChanges(currentMember.rankId, updateData.rankId, currentMember.departmentId);
+              roleChanges.push(...rankRoleChanges);
             }
 
-            // Handle team changes through Discord roles first
             if (updateData.primaryTeamId !== undefined && updateData.primaryTeamId !== currentMember.primaryTeamId) {
-              // Remove old primary team Discord role if member had one
-              if (currentMember.primaryTeamId) {
-                const oldTeam = await postgrestDb
-                  .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
-                  .from(deptSchema.departmentTeams)
-                  .where(eq(deptSchema.departmentTeams.id, currentMember.primaryTeamId))
-                  .limit(1);
-
-                if (oldTeam.length > 0 && oldTeam[0]!.discordRoleId) {
-                  const serverId = await getServerIdFromRoleId(oldTeam[0]!.discordRoleId);
-                  if (serverId) {
-                    await manageDiscordRole(
-                      'remove',
-                      currentMember.discordId,
-                      oldTeam[0]!.discordRoleId,
-                      serverId
-                    );
-                  }
-                }
-              }
-
-              // Add new primary team Discord role if new team has one
-              if (updateData.primaryTeamId) {
-                const newTeam = await postgrestDb
-                  .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
-                  .from(deptSchema.departmentTeams)
-                  .where(eq(deptSchema.departmentTeams.id, updateData.primaryTeamId))
-                  .limit(1);
-
-                if (newTeam.length > 0 && newTeam[0]!.discordRoleId) {
-                  const serverId = await getServerIdFromRoleId(newTeam[0]!.discordRoleId);
-                  if (serverId) {
-                    await manageDiscordRole(
-                      'add',
-                      currentMember.discordId,
-                      newTeam[0]!.discordRoleId,
-                      serverId
-                    );
-                  }
-                }
-              }
+              const teamRoleChanges = await createTeamRoleChanges(currentMember.primaryTeamId, updateData.primaryTeamId, currentMember.departmentId);
+              roleChanges.push(...teamRoleChanges);
             }
 
-            // Wait a moment for Discord role changes to propagate
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Apply role changes if any exist
+            if (roleChanges.length > 0) {
+              const syncResult = await syncMemberRolesAndCallsign({
+                discordId: currentMember.discordId,
+                departmentId: currentMember.departmentId,
+                memberId: currentMember.id,
+                roleChanges,
+                skipRoleManagement: false,
+              });
 
-            // Now update the database based on actual Discord roles
-            if (updateData.rankId !== undefined || updateData.primaryTeamId !== undefined) {
-              const rankUpdateResult = await updateUserRankFromDiscordRoles(currentMember.discordId, currentMember.departmentId);
-              const teamUpdateResult = await updateUserTeamFromDiscordRoles(currentMember.discordId, currentMember.departmentId);
-              
-              if (!rankUpdateResult.success || !teamUpdateResult.success) {
-                console.warn('Discord role sync had issues:', { rankUpdateResult, teamUpdateResult });
+              if (!syncResult.success) {
+                console.warn(`⚠️ Role sync had issues: ${syncResult.message}`);
               }
+            } else if (updateData.rankId !== undefined || updateData.primaryTeamId !== undefined) {
+              // If rank/team changed but no Discord roles, still trigger background sync for callsign
+              void syncMemberRolesAndCallsignInBackground(
+                currentMember.discordId,
+                currentMember.departmentId,
+                currentMember.id
+              );
             }
 
             // Prepare update data for non-role/team fields only
@@ -3600,48 +2533,19 @@ export const deptRouter = createTRPCRouter({
 
 
             // First, handle Discord role changes for primary team assignment
-            // Remove old primary team role if member had one
-            if (memberData.primaryTeamId && memberData.primaryTeamId !== input.teamId) {
-              const oldTeam = await postgrestDb
-                .select({ discordRoleId: deptSchema.departmentTeams.discordRoleId })
-                .from(deptSchema.departmentTeams)
-                .where(eq(deptSchema.departmentTeams.id, memberData.primaryTeamId))
-                .limit(1);
-
-              if (oldTeam.length > 0 && oldTeam[0]!.discordRoleId) {
-                const serverId = await getServerIdFromRoleId(oldTeam[0]!.discordRoleId);
-                if (serverId) {
-                  await manageDiscordRole(
-                    'remove',
-                    memberData.discordId,
-                    oldTeam[0]!.discordRoleId,
-                    serverId
-                  );
-                }
-              }
-            }
-
-            // Add new primary team Discord role
-            if (teamData.discordRoleId) {
-              const serverId = await getServerIdFromRoleId(teamData.discordRoleId);
-              if (serverId) {
-                await manageDiscordRole(
-                  'add',
-                  memberData.discordId,
-                  teamData.discordRoleId,
-                  serverId
-                );
-              }
-            }
-
-            // Wait for Discord role changes to propagate
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            // Now sync the database based on actual Discord roles
-            const teamUpdateResult = await updateUserTeamFromDiscordRoles(memberData.discordId, memberData.departmentId);
+            // Use the new centralized sync function to handle Discord role changes and database sync
+            const roleChanges = await createTeamRoleChanges(memberData.primaryTeamId, input.teamId, memberData.departmentId);
             
-            if (!teamUpdateResult.success) {
-              console.warn('Discord team role sync had issues:', teamUpdateResult);
+            const syncResult = await syncMemberRolesAndCallsign({
+              discordId: memberData.discordId,
+              departmentId: memberData.departmentId,
+              memberId: memberData.id,
+              roleChanges,
+              skipRoleManagement: false,
+            });
+
+            if (!syncResult.success) {
+              console.warn(`⚠️ Team assignment sync had issues: ${syncResult.message}`);
             }
 
             // Update member status to active and timestamp
@@ -4103,12 +3007,12 @@ export const deptRouter = createTRPCRouter({
         .input(z.object({
           memberId: z.number().int().positive(),
           toRankId: z.number().int().positive(),
-          reason: z.string().optional(),
+          reason: z.string().min(1, "Reason is required for promotions"),
           notes: z.string().optional(),
         }))
         .mutation(async ({ ctx, input }) => {
           try {
-            // Get the member being promoted and their current info
+            // Get the member to be promoted
             const targetMember = await postgrestDb
               .select({
                 id: deptSchema.departmentMembers.id,
@@ -4202,33 +3106,11 @@ export const deptRouter = createTRPCRouter({
             if (member.currentRankLevel && targetRank[0]!.level <= member.currentRankLevel) {
               throw new TRPCError({
                 code: "BAD_REQUEST",
-                message: "Target rank is not higher than current rank. Use demote for rank reductions.",
+                message: "Target rank is not higher than current rank. Use demote for rank decreases.",
               });
             }
 
-            // Check rank limits before promotion
-            const memberInfo = await postgrestDb
-              .select({
-                primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
-              })
-              .from(deptSchema.departmentMembers)
-              .where(eq(deptSchema.departmentMembers.id, input.memberId))
-              .limit(1);
-
-            const rankLimitCheck = await validateRankLimit(
-              input.toRankId,
-              member.departmentId,
-              memberInfo[0]?.primaryTeamId ?? undefined
-            );
-
-            if (!rankLimitCheck.canPromote) {
-              throw new TRPCError({
-                code: "CONFLICT",
-                message: `Promotion denied: ${rankLimitCheck.reason}`,
-              });
-            }
-
-            // Record the promotion in history (before Discord call for audit trail)
+            // Record the promotion in history (before sync for audit trail)
             await postgrestDb.insert(deptSchema.departmentPromotionHistory).values({
               memberId: input.memberId,
               fromRankId: member.currentRankId,
@@ -4238,77 +3120,33 @@ export const deptRouter = createTRPCRouter({
               notes: input.notes,
             });
 
-            // Update Discord roles FIRST - this is the source of truth
-            try {
-              // Get department's Discord guild ID
-              const department = await postgrestDb
-                .select({ discordGuildId: deptSchema.departments.discordGuildId })
-                .from(deptSchema.departments)
-                .where(eq(deptSchema.departments.id, member.departmentId))
-                .limit(1);
+            // Use the new centralized sync function to handle Discord role changes and database sync
+            const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
+            
+            const syncResult = await syncMemberRolesAndCallsign({
+              discordId: member.discordId,
+              departmentId: member.departmentId,
+              memberId: member.id,
+              roleChanges,
+              skipRoleManagement: false,
+            });
 
-              if (department.length === 0) {
-                throw new TRPCError({
-                  code: "NOT_FOUND",
-                  message: "Department Discord configuration not found",
-                });
-              }
-
-              const serverId = department[0]!.discordGuildId;
-
-              // Remove old Discord role if it exists
-              if (member.currentRankId) {
-                const oldRank = await postgrestDb
-                  .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
-                  .from(deptSchema.departmentRanks)
-                  .where(eq(deptSchema.departmentRanks.id, member.currentRankId))
-                  .limit(1);
-
-                if (oldRank.length > 0 && oldRank[0]!.discordRoleId) {
-                  await manageDiscordRole('remove', member.discordId, oldRank[0]!.discordRoleId, serverId);
-                }
-              }
-
-              // Add new Discord role
-              if (targetRank[0]!.discordRoleId) {
-                await manageDiscordRole('add', member.discordId, targetRank[0]!.discordRoleId, serverId);
-              }
-
-              // Wait for Discord role changes to propagate (3 seconds should be sufficient)
-              console.log("⏳ Waiting for Discord role changes to propagate...");
-              await new Promise(resolve => setTimeout(resolve, 3000));
-
-              // Synchronize database with actual Discord roles
-              console.log("🔄 Synchronizing database with Discord roles...");
-              const rankUpdateResult = await updateUserRankFromDiscordRoles(member.discordId, member.departmentId);
-              
-              if (!rankUpdateResult.success) {
-                console.warn("⚠️ Failed to sync rank from Discord roles, but Discord update succeeded");
-              } else {
-                console.log("✅ Database synchronized with Discord roles");
-              }
-
-              // Return success - promotion is complete
-              return {
-                success: true,
-                message: "Promotion successful. Discord roles updated and database synchronized.",
-                memberId: input.memberId,
-                fromRankId: member.currentRankId,
-                toRankId: input.toRankId,
-                discordId: member.discordId,
-                syncResult: rankUpdateResult,
-              };
-
-            } catch (discordError) {
-              console.error("Discord role update failed for promotion:", discordError);
-              
-              // Discord failed - promotion fails
+            if (!syncResult.success) {
               throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message: "Failed to update Discord roles. Promotion cancelled.",
-                cause: discordError,
+                message: `Promotion failed: ${syncResult.message}`,
               });
             }
+
+            return {
+              success: true,
+              message: "Promotion successful. Discord roles updated and database synchronized.",
+              memberId: input.memberId,
+              fromRankId: member.currentRankId,
+              toRankId: input.toRankId,
+              discordId: member.discordId,
+              syncResult,
+            };
           } catch (error) {
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
@@ -4426,7 +3264,7 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Record the demotion in history (before Discord call for audit trail)
+            // Record the demotion in history (before sync for audit trail)
             await postgrestDb.insert(deptSchema.departmentPromotionHistory).values({
               memberId: input.memberId,
               fromRankId: member.currentRankId,
@@ -4436,77 +3274,33 @@ export const deptRouter = createTRPCRouter({
               notes: input.notes,
             });
 
-            // Update Discord roles FIRST - this is the source of truth
-            try {
-              // Get department's Discord guild ID
-              const department = await postgrestDb
-                .select({ discordGuildId: deptSchema.departments.discordGuildId })
-                .from(deptSchema.departments)
-                .where(eq(deptSchema.departments.id, member.departmentId))
-                .limit(1);
+            // Use the new centralized sync function to handle Discord role changes and database sync
+            const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
+            
+            const syncResult = await syncMemberRolesAndCallsign({
+              discordId: member.discordId,
+              departmentId: member.departmentId,
+              memberId: member.id,
+              roleChanges,
+              skipRoleManagement: false,
+            });
 
-              if (department.length === 0) {
-                throw new TRPCError({
-                  code: "NOT_FOUND",
-                  message: "Department Discord configuration not found",
-                });
-              }
-
-              const serverId = department[0]!.discordGuildId;
-
-              // Remove old Discord role if it exists
-              if (member.currentRankId) {
-                const oldRank = await postgrestDb
-                  .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
-                  .from(deptSchema.departmentRanks)
-                  .where(eq(deptSchema.departmentRanks.id, member.currentRankId))
-                  .limit(1);
-
-                if (oldRank.length > 0 && oldRank[0]!.discordRoleId) {
-                  await manageDiscordRole('remove', member.discordId, oldRank[0]!.discordRoleId, serverId);
-                }
-              }
-
-              // Add new Discord role
-              if (targetRank[0]!.discordRoleId) {
-                await manageDiscordRole('add', member.discordId, targetRank[0]!.discordRoleId, serverId);
-              }
-
-              // Wait for Discord role changes to propagate (3 seconds should be sufficient)
-              console.log("⏳ Waiting for Discord role changes to propagate...");
-              await new Promise(resolve => setTimeout(resolve, 3000));
-
-              // Synchronize database with actual Discord roles
-              console.log("🔄 Synchronizing database with Discord roles...");
-              const rankUpdateResult = await updateUserRankFromDiscordRoles(member.discordId, member.departmentId);
-              
-              if (!rankUpdateResult.success) {
-                console.warn("⚠️ Failed to sync rank from Discord roles, but Discord update succeeded");
-              } else {
-                console.log("✅ Database synchronized with Discord roles");
-              }
-
-              // Return success - demotion is complete
-              return {
-                success: true,
-                message: "Demotion successful. Discord roles updated and database synchronized.",
-                memberId: input.memberId,
-                fromRankId: member.currentRankId,
-                toRankId: input.toRankId,
-                discordId: member.discordId,
-                syncResult: rankUpdateResult,
-              };
-
-            } catch (discordError) {
-              console.error("Discord role update failed for demotion:", discordError);
-              
-              // Discord failed - demotion fails
+            if (!syncResult.success) {
               throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message: "Failed to update Discord roles. Demotion cancelled.",
-                cause: discordError,
+                message: `Demotion failed: ${syncResult.message}`,
               });
             }
+
+            return {
+              success: true,
+              message: "Demotion successful. Discord roles updated and database synchronized.",
+              memberId: input.memberId,
+              fromRankId: member.currentRankId,
+              toRankId: input.toRankId,
+              discordId: member.discordId,
+              syncResult,
+            };
           } catch (error) {
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
@@ -4978,8 +3772,8 @@ export const deptRouter = createTRPCRouter({
               }
             }
 
-            return {
-              success: true,
+              return {
+                success: true,
               message: `Disciplinary action dismissed successfully`,
               action: result[0],
             };

@@ -1,7 +1,7 @@
 // Feature flags for Discord sync behavior
 export const DISCORD_SYNC_FEATURE_FLAGS = {
   ENABLE_AUTO_SYNC_AFTER_ROLE_CHANGE: true,
-  SYNC_DELAY_MS: 10000, // Reduced from 10s to 3s - most Discord changes propagate quickly
+  SYNC_DELAY_MS: 15000, // Reduced from 10s to 15s - most Discord changes propagate quickly
   ENABLE_RANK_LIMIT_VALIDATION: true,
   ENABLE_CALLSIGN_AUTO_GENERATION: true,
   ENABLE_DETAILED_LOGGING: true, // Temporarily enabled for debugging

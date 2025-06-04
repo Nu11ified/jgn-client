@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { eq, and, isNotNull } from "drizzle-orm";
 import { postgrestDb } from "@/server/postgres";
 import * as deptSchema from "@/server/postgres/schema/department";
 import type { SyncMemberRequest, RoleChangeAction, DiscordRoleManagementResult } from "./types";
-import { manageDiscordRole, getServerIdFromRoleId } from "./discordRoleManager";
+import { manageDiscordRole, getServerIdFromRoleId, manageDiscordRoleWithVerification } from "./discordRoleManager";
 import { updateUserRankFromDiscordRoles } from "./rankSyncService";
 import { updateUserTeamFromDiscordRoles } from "./teamSyncService";
 import { regenerateAndUpdateMemberCallsign } from "./callsignService";
@@ -11,10 +11,16 @@ import { DISCORD_SYNC_FEATURE_FLAGS, DEFAULT_SYNC_CONFIG } from "./constants";
 /**
  * Main function to sync a member's roles and callsign
  * This is the central orchestrator that handles the complete sync flow:
- * 1. Apply Discord role changes (if any)
- * 2. Wait for microservice to detect changes
- * 3. Sync rank and team from Discord roles
+ * 1. Apply Discord role changes (if any) with verification for rank roles
+ * 2. Wait for Discord role propagation
+ * 3. Sync rank and team from Discord roles (background polling)
  * 4. Update callsign
+ * 
+ * IMPROVED FEATURES:
+ * - Removes ALL department rank roles before adding new rank role
+ * - Uses verification for rank role assignments to ensure they succeed
+ * - Provides detailed error reporting and retry logic
+ * - Distinguishes between critical rank role failures and team role failures
  */
 export const syncMemberRolesAndCallsign = async (request: SyncMemberRequest): Promise<{
   success: boolean;
@@ -35,22 +41,45 @@ export const syncMemberRolesAndCallsign = async (request: SyncMemberRequest): Pr
       
       for (const roleChange of roleChanges) {
         try {
-          const success = await manageDiscordRole(
-            roleChange.type,
-            discordId,
-            roleChange.roleId,
-            roleChange.serverId
-          );
+          // Use verification for rank roles to ensure they are applied successfully
+          const useVerification = roleChange.roleType === 'rank';
+          
+          const result = useVerification 
+            ? await manageDiscordRoleWithVerification(
+                roleChange.type,
+                discordId,
+                roleChange.roleId,
+                roleChange.serverId
+              )
+            : await manageDiscordRole(
+                roleChange.type,
+                discordId,
+                roleChange.roleId,
+                roleChange.serverId
+              );
+          
+          const isVerificationResult = 'verified' in result;
+          
+          const message = result.success 
+            ? `${roleChange.type} ${roleChange.roleType} role ${roleChange.roleId}: success (${result.retryCount ?? 1} attempts${useVerification && isVerificationResult && result.verified ? ', verified' : ''})`
+            : `${roleChange.type} ${roleChange.roleType} role ${roleChange.roleId}: failed - ${result.error}`;
 
           roleManagementResults.push({
-            success,
-            message: `${roleChange.type} ${roleChange.roleType} role ${roleChange.roleId}: ${success ? 'success' : 'failed'}`,
-            ...(roleChange.type === 'add' ? { addedRoles: [{ type: roleChange.roleType, roleId: roleChange.roleId }] } : {}),
-            ...(roleChange.type === 'remove' ? { removedRoles: [{ type: roleChange.roleType, roleId: roleChange.roleId }] } : {}),
+            success: result.success,
+            message,
+            ...(roleChange.type === 'add' && result.success ? { addedRoles: [{ type: roleChange.roleType, roleId: roleChange.roleId }] } : {}),
+            ...(roleChange.type === 'remove' && result.success ? { removedRoles: [{ type: roleChange.roleType, roleId: roleChange.roleId }] } : {}),
           });
 
-          if (!success) {
-            console.warn(`⚠️ Failed to ${roleChange.type} ${roleChange.roleType} role ${roleChange.roleId}`);
+          if (!result.success) {
+            console.warn(`⚠️ Failed to ${roleChange.type} ${roleChange.roleType} role ${roleChange.roleId}: ${result.error}`);
+            // For rank roles, log this as an error since it's critical
+            if (roleChange.roleType === 'rank') {
+              console.error(`🚨 CRITICAL: Rank role ${roleChange.type} failed! This will affect user permissions.`);
+            }
+          } else {
+            const verifiedText = useVerification && isVerificationResult && result.verified ? ' and verified' : '';
+            console.log(`✅ Successfully ${roleChange.type}ed ${roleChange.roleType} role ${roleChange.roleId} after ${result.retryCount ?? 1} attempts${verifiedText}`);
           }
         } catch (error) {
           console.error(`❌ Error applying role change:`, error);
@@ -62,8 +91,18 @@ export const syncMemberRolesAndCallsign = async (request: SyncMemberRequest): Pr
         }
       }
 
-      // Wait for Discord propagation if we made role changes
-      if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_AUTO_SYNC_AFTER_ROLE_CHANGE) {
+      // Check if any role changes failed and report
+      const failedChanges = roleManagementResults.filter(r => !r.success);
+      if (failedChanges.length > 0) {
+        console.warn(`⚠️ ${failedChanges.length}/${roleChanges.length} role changes failed`);
+        failedChanges.forEach(failure => console.warn(`   - ${failure.message}`));
+      } else {
+        console.log(`✅ All ${roleChanges.length} role changes completed successfully`);
+      }
+
+      // Wait for Discord propagation if we made role changes and at least some succeeded
+      const successfulChanges = roleManagementResults.filter(r => r.success);
+      if (successfulChanges.length > 0 && DISCORD_SYNC_FEATURE_FLAGS.ENABLE_AUTO_SYNC_AFTER_ROLE_CHANGE) {
         console.log(`⏳ Waiting ${DISCORD_SYNC_FEATURE_FLAGS.SYNC_DELAY_MS}ms for Discord role propagation...`);
         await new Promise(resolve => setTimeout(resolve, DISCORD_SYNC_FEATURE_FLAGS.SYNC_DELAY_MS));
       }
@@ -168,6 +207,7 @@ export const syncMemberRolesAndCallsignInBackground = async (
 
 /**
  * Helper function to create role change actions for rank updates
+ * This function ensures ALL department rank roles are removed before adding the new one
  */
 export const createRankRoleChanges = async (
   oldRankId: number | null,
@@ -176,48 +216,83 @@ export const createRankRoleChanges = async (
 ): Promise<RoleChangeAction[]> => {
   const roleChanges: RoleChangeAction[] = [];
 
-  // Remove old rank role if exists
-  if (oldRankId) {
-    const oldRank = await postgrestDb
-      .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
-      .from(deptSchema.departmentRanks)
-      .where(eq(deptSchema.departmentRanks.id, oldRankId))
-      .limit(1);
+  // Get ALL ranks for this department with Discord role IDs
+  const allDepartmentRanks = await postgrestDb
+    .select({ 
+      id: deptSchema.departmentRanks.id,
+      discordRoleId: deptSchema.departmentRanks.discordRoleId 
+    })
+    .from(deptSchema.departmentRanks)
+    .where(
+      and(
+        eq(deptSchema.departmentRanks.departmentId, departmentId),
+        eq(deptSchema.departmentRanks.isActive, true),
+        isNotNull(deptSchema.departmentRanks.discordRoleId)
+      )
+    );
 
-    if (oldRank.length > 0 && oldRank[0]!.discordRoleId) {
-      const serverId = await getServerIdFromRoleId(oldRank[0]!.discordRoleId);
-      if (serverId) {
-        roleChanges.push({
-          type: 'remove',
-          roleId: oldRank[0]!.discordRoleId,
-          serverId,
-          roleType: 'rank',
-        });
-      }
+  console.log(`🧹 Found ${allDepartmentRanks.length} active ranks with Discord roles in department ${departmentId}`);
+
+  // Remove ALL rank roles for this department (except the new one if it exists)
+  for (const rank of allDepartmentRanks) {
+    if (!rank.discordRoleId || rank.id === newRankId) continue;
+    
+    const serverId = await getServerIdFromRoleId(rank.discordRoleId);
+    if (serverId) {
+      roleChanges.push({
+        type: 'remove',
+        roleId: rank.discordRoleId,
+        serverId,
+        roleType: 'rank',
+      });
+      console.log(`➖ Queued removal of rank role ${rank.discordRoleId} (Rank ID: ${rank.id})`);
     }
   }
 
   // Add new rank role if exists
   if (newRankId) {
+    console.log(`🔍 Looking up new rank ${newRankId} to add Discord role...`);
     const newRank = await postgrestDb
-      .select({ discordRoleId: deptSchema.departmentRanks.discordRoleId })
+      .select({ 
+        id: deptSchema.departmentRanks.id,
+        name: deptSchema.departmentRanks.name,
+        discordRoleId: deptSchema.departmentRanks.discordRoleId 
+      })
       .from(deptSchema.departmentRanks)
       .where(eq(deptSchema.departmentRanks.id, newRankId))
       .limit(1);
 
-    if (newRank.length > 0 && newRank[0]!.discordRoleId) {
-      const serverId = await getServerIdFromRoleId(newRank[0]!.discordRoleId);
-      if (serverId) {
-        roleChanges.push({
-          type: 'add',
-          roleId: newRank[0]!.discordRoleId,
-          serverId,
-          roleType: 'rank',
-        });
+    if (newRank.length === 0) {
+      console.error(`❌ New rank ${newRankId} not found in database!`);
+    } else {
+      const rank = newRank[0]!;
+      console.log(`📋 Found rank: "${rank.name}" (ID: ${rank.id}, Discord Role: ${rank.discordRoleId || 'NONE'})`);
+      
+      if (!rank.discordRoleId) {
+        console.warn(`⚠️ Rank "${rank.name}" has no Discord role ID configured!`);
+      } else {
+        console.log(`🔍 Getting server ID for Discord role ${rank.discordRoleId}...`);
+        const serverId = await getServerIdFromRoleId(rank.discordRoleId);
+        
+        if (!serverId) {
+          console.error(`❌ Could not find server ID for Discord role ${rank.discordRoleId} (rank: ${rank.name})`);
+        } else {
+          console.log(`✅ Found server ID ${serverId} for role ${rank.discordRoleId}`);
+          roleChanges.push({
+            type: 'add',
+            roleId: rank.discordRoleId,
+            serverId,
+            roleType: 'rank',
+          });
+          console.log(`➕ Queued addition of rank role ${rank.discordRoleId} (Rank: "${rank.name}", ID: ${newRankId})`);
+        }
       }
     }
+  } else {
+    console.log(`ℹ️ No new rank to add (newRankId is ${newRankId})`);
   }
 
+  console.log(`🎭 Created ${roleChanges.length} role change actions for rank update`);
   return roleChanges;
 };
 

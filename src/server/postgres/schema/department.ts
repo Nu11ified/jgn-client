@@ -554,7 +554,7 @@ export const departmentPromotionHistory = createDepartmentTable(
     id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
     memberId: d.integer("member_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
     fromRankId: d.integer("from_rank_id").references(() => departmentRanks.id, { onDelete: "set null" }),
-    toRankId: d.integer("to_rank_id").references(() => departmentRanks.id, { onDelete: "set null" }).notNull(),
+    toRankId: d.integer("to_rank_id").references(() => departmentRanks.id, { onDelete: "set null" }),
     promotedBy: d.text("promoted_by").notNull(), // Discord User ID of promoter
     reason: d.text("reason"), // Reason for promotion/demotion
     effectiveDate: d.timestamp("effective_date", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),

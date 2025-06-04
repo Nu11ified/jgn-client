@@ -3286,7 +3286,6 @@ export const deptRouter = createTRPCRouter({
   // ===== USER INTERACTIONS WITH PERMISSION RESTRICTIONS =====
   user: createTRPCRouter({
     // ===== PERMISSION HELPERS =====
-    // Check if user has specific permission in a department
     checkPermission: protectedProcedure
       .input(z.object({
         departmentId: z.number().int().positive(),
@@ -3339,6 +3338,293 @@ export const deptRouter = createTRPCRouter({
           });
         }
       }),
+
+    // ===== MEMBER MANAGEMENT (USER SCOPED) =====
+    members: createTRPCRouter({
+      update: protectedProcedure
+        .input(updateMemberSchema) // Same schema as admin, but logic will differ
+        .mutation(async ({ ctx, input }) => {
+          const { id: targetMemberId, ...updateData } = input;
+          const actorDiscordId = String(ctx.dbUser.discordId);
+
+          // 1. Fetch the target member
+          const targetMemberQuery = await postgrestDb
+            .select({
+              id: deptSchema.departmentMembers.id,
+              discordId: deptSchema.departmentMembers.discordId,
+              departmentId: deptSchema.departmentMembers.departmentId,
+              roleplayName: deptSchema.departmentMembers.roleplayName, // Added missing field
+              rankId: deptSchema.departmentMembers.rankId,
+              rankLevel: deptSchema.departmentRanks.level,
+              primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
+              status: deptSchema.departmentMembers.status,
+              isActive: deptSchema.departmentMembers.isActive,
+              departmentIdNumber: deptSchema.departmentMembers.departmentIdNumber,
+              callsign: deptSchema.departmentMembers.callsign, // For callsign generation
+            })
+            .from(deptSchema.departmentMembers)
+            .leftJoin(
+              deptSchema.departmentRanks,
+              eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+            )
+            .where(eq(deptSchema.departmentMembers.id, targetMemberId))
+            .limit(1);
+
+          if (targetMemberQuery.length === 0) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Target member not found." });
+          }
+          const targetMember = targetMemberQuery[0]!;
+          const targetDiscordId = targetMember.discordId;
+          const targetRankLevel = targetMember.rankLevel ?? 0; // Default to 0 if no rank
+
+          // 2. Fetch actor's (current user) membership in the target member's department
+          const actorMemberQuery = await postgrestDb
+            .select({
+              rankId: deptSchema.departmentMembers.rankId,
+              permissions: deptSchema.departmentRanks.permissions,
+              rankLevel: deptSchema.departmentRanks.level,
+            })
+            .from(deptSchema.departmentMembers)
+            .leftJoin(
+              deptSchema.departmentRanks,
+              eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+            )
+            .where(
+              and(
+                eq(deptSchema.departmentMembers.discordId, actorDiscordId),
+                eq(deptSchema.departmentMembers.departmentId, targetMember.departmentId),
+                eq(deptSchema.departmentMembers.isActive, true) // Actor must be active
+              )
+            )
+            .limit(1);
+
+          if (actorMemberQuery.length === 0) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "You are not an active member of this department or do not exist in it.",
+            });
+          }
+          const actorMember = actorMemberQuery[0]!;
+          const actorPermissions = actorMember.permissions;
+          const actorRankLevel = actorMember.rankLevel ?? 0;
+
+          const isEditingSelf = actorDiscordId === targetDiscordId;
+          let finalUpdateData = { ...updateData };
+
+          // 3. Permission and Field Restriction Logic
+          if (isEditingSelf) {
+            // User is editing themselves
+            // Only allow specific fields to be updated by the user for themselves
+            const allowedSelfEditFields: (keyof typeof updateData)[] = ['roleplayName', 'notes', 'badgeNumber'];
+            const disallowedChanges = Object.keys(updateData).filter(
+              key => !allowedSelfEditFields.includes(key as keyof typeof updateData) && updateData[key as keyof typeof updateData] !== undefined
+            );
+
+            if (disallowedChanges.length > 0) {
+               // If they try to change rankId, status, primaryTeamId, isActive for themselves without manage_members, block.
+               // If they have manage_members, they might be able to change their own status (e.g. notes), but not rank.
+               // The frontend already restricts this, but backend must enforce.
+              if (
+                updateData.rankId !== undefined && updateData.rankId !== targetMember.rankId ||
+                updateData.status !== undefined && updateData.status !== targetMember.status ||
+                updateData.primaryTeamId !== undefined && updateData.primaryTeamId !== targetMember.primaryTeamId ||
+                updateData.isActive !== undefined && updateData.isActive !== targetMember.isActive
+              ) {
+                 // If user does not have manage_members, they cannot change these sensitive fields for themselves.
+                 if (!actorPermissions?.manage_members) {
+                    throw new TRPCError({
+                        code: "FORBIDDEN",
+                        message: `You cannot modify your own rank, status, team, or activity status. Allowed fields for self-edit: ${allowedSelfEditFields.join(', ')}. Attempted to change: ${disallowedChanges.join(', ')}`,
+                    });
+                 }
+                 // If they DO have manage_members, they still shouldn't change their own rank via this route.
+                 // Status or team might be okay if they have manage_members, but rank is too sensitive.
+                 if (updateData.rankId !== undefined && updateData.rankId !== targetMember.rankId) {
+                    throw new TRPCError({
+                        code: "FORBIDDEN",
+                        message: "You cannot change your own rank, even with manage_members permission. Please contact an admin.",
+                    });
+                 }
+              }
+            }
+            // Filter updateData to only include allowed fields for self-edit
+            finalUpdateData = Object.fromEntries(
+                Object.entries(updateData).filter(([key]) => allowedSelfEditFields.includes(key as keyof typeof updateData))
+            ) as Partial<typeof updateData>;
+            
+            // If no allowed fields are being changed, there's nothing to do.
+            if (Object.keys(finalUpdateData).length === 0 && Object.keys(updateData).length > 0) {
+                 throw new TRPCError({ code: "BAD_REQUEST", message: "No permissible fields to update for self-edit."});
+            } else if (Object.keys(finalUpdateData).length === 0) {
+                // Nothing was actually sent to update that is allowed
+                return targetMember; // Or some other appropriate "no-op" response
+            }
+
+          } else {
+            // User is editing someone else
+            if (!actorPermissions?.manage_members) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You do not have permission to manage members in this department.",
+              });
+            }
+            // Apply rank hierarchy check
+            assertCanActOnMember({
+              actorDiscordId,
+              actorRankLevel,
+              targetDiscordId,
+              targetRankLevel,
+              actionName: "modify member details",
+            });
+            // No field restrictions when manager edits others (beyond assertCanActOnMember)
+          }
+          
+          // If, after all checks, there's no data to update, throw error or return early.
+          if (Object.keys(finalUpdateData).length === 0) {
+            // This can happen if self-edit attempts to change only disallowed fields.
+            // Or if the input was empty to begin with.
+            throw new TRPCError({ code: "BAD_REQUEST", message: "No valid data provided for update." });
+          }
+
+
+          // 4. Department Info for Discord Ops
+          const department = await postgrestDb
+            .select({
+              callsignPrefix: deptSchema.departments.callsignPrefix,
+              discordGuildId: deptSchema.departments.discordGuildId,
+            })
+            .from(deptSchema.departments)
+            .where(eq(deptSchema.departments.id, targetMember.departmentId))
+            .limit(1);
+
+          if (department.length === 0) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Department not found for the member." });
+          }
+          const deptDetails = department[0]!;
+
+          // 5. Handle Rank and Team Changes (largely adapted from admin.members.update)
+          const roleChanges: RoleChangeAction[] = [];
+          let callsignNeedsSync = false;
+
+          if (finalUpdateData.rankId !== undefined && finalUpdateData.rankId !== targetMember.rankId) {
+            // Rank limit validation (adapted from promote/demote routes)
+            const rankValidation = await validateRankLimit(finalUpdateData.rankId!, targetMember.departmentId, targetMember.primaryTeamId ?? undefined);
+            if (!rankValidation.canPromote && finalUpdateData.rankId !== null) { // null for rank removal bypasses limit
+                 throw new TRPCError({ code: "BAD_REQUEST", message: rankValidation.reason ?? "Cannot change to this rank due to rank limits." });
+            }
+            const rankRoleChanges = await createRankRoleChanges(targetMember.rankId, finalUpdateData.rankId, targetMember.departmentId);
+            roleChanges.push(...rankRoleChanges);
+            callsignNeedsSync = true;
+          }
+
+          if (finalUpdateData.primaryTeamId !== undefined && finalUpdateData.primaryTeamId !== targetMember.primaryTeamId) {
+            const teamRoleChanges = await createTeamRoleChanges(targetMember.primaryTeamId, finalUpdateData.primaryTeamId, targetMember.departmentId);
+            roleChanges.push(...teamRoleChanges);
+            callsignNeedsSync = true;
+          }
+          
+          // Perform Discord Sync if roles changed OR if only callsign needs update (e.g. roleplay name change)
+          if (roleChanges.length > 0 || (finalUpdateData.roleplayName && finalUpdateData.roleplayName !== targetMember.roleplayName)) {
+            // If roleplayName changed, callsign needs sync even if rank/team didn't change roles.
+            // The syncMemberRolesAndCallsign will handle callsign update.
+            callsignNeedsSync = true; 
+          }
+
+          if (callsignNeedsSync) {
+             const syncResult = await syncMemberRolesAndCallsign({
+                discordId: targetMember.discordId,
+                departmentId: targetMember.departmentId,
+                memberId: targetMember.id,
+                roleChanges, // Can be empty if only callsign from name change
+                skipRoleManagement: false, // Default to allowing role management
+              });
+              if (!syncResult.success) {
+                console.warn(`⚠️ Role/Callsign sync had issues for member ${targetMember.id}: ${syncResult.message}`);
+                // Decide if this should be a TRPCError or just a warning
+              }
+          }
+          
+
+          // 6. Prepare data for direct member table update (non-role/team affecting fields)
+          const memberUpdatePayload: Partial<typeof deptSchema.departmentMembers.$inferInsert> = {};
+          if (finalUpdateData.roleplayName !== undefined) memberUpdatePayload.roleplayName = finalUpdateData.roleplayName;
+          if (finalUpdateData.badgeNumber !== undefined) memberUpdatePayload.badgeNumber = finalUpdateData.badgeNumber;
+          if (finalUpdateData.status !== undefined) memberUpdatePayload.status = finalUpdateData.status;
+          if (finalUpdateData.notes !== undefined) memberUpdatePayload.notes = finalUpdateData.notes;
+          if (finalUpdateData.isActive !== undefined) memberUpdatePayload.isActive = finalUpdateData.isActive;
+          
+          // Add rankId and primaryTeamId if they are being updated and are part of finalUpdateData
+          // (they would be excluded if it's a self-edit trying to change these without permission)
+          if (finalUpdateData.rankId !== undefined) memberUpdatePayload.rankId = finalUpdateData.rankId;
+          if (finalUpdateData.primaryTeamId !== undefined) memberUpdatePayload.primaryTeamId = finalUpdateData.primaryTeamId;
+
+
+          // 7. Handle status/isActive changes regarding Discord roles (adapted from admin)
+          if (finalUpdateData.status && ['inactive', 'suspended', 'blacklisted', 'leave_of_absence'].includes(finalUpdateData.status) && finalUpdateData.status !== targetMember.status) {
+            console.log(`[User Update] Member ${targetMember.id} status changing to ${finalUpdateData.status}, removing Discord roles`);
+            // Background removal, don't block on this
+            void removeDiscordRolesForInactiveMember(targetMember.discordId, targetMember.departmentId).catch(console.error);
+          }
+          if (finalUpdateData.status === 'active' && targetMember.status !== 'active') {
+            console.log(`[User Update] Member ${targetMember.id} status changing to active, restoring Discord roles`);
+            // Background restoration
+            void restoreDiscordRolesForActiveMember(targetMember.discordId, targetMember.departmentId).catch(console.error);
+          }
+          if (finalUpdateData.isActive === true && targetMember.isActive === false) {
+            console.log(`[User Update] Member ${targetMember.id} set to active (isActive: true), restoring Discord roles`);
+            void restoreDiscordRolesForActiveMember(targetMember.discordId, targetMember.departmentId).catch(console.error);
+          }
+          if (finalUpdateData.isActive === false && targetMember.isActive === true) {
+            console.log(`[User Update] Member ${targetMember.id} set to inactive (isActive: false), removing Discord roles`);
+            void removeDiscordRolesForInactiveMember(targetMember.discordId, targetMember.departmentId).catch(console.error);
+
+            if (targetMember.departmentIdNumber) {
+              await postgrestDb
+                .update(deptSchema.departmentIdNumbers)
+                .set({ isAvailable: true, currentMemberId: null })
+                .where(and(
+                  eq(deptSchema.departmentIdNumbers.departmentId, targetMember.departmentId),
+                  eq(deptSchema.departmentIdNumbers.idNumber, targetMember.departmentIdNumber)
+                ));
+              console.log(`[User Update] Released ID number ${targetMember.departmentIdNumber} for member ${targetMember.id}`);
+            }
+          }
+
+          // 8. Perform the database update for member details
+          let updatedMemberResult;
+          if (Object.keys(memberUpdatePayload).length > 0) {
+            const updateResult = await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set(memberUpdatePayload)
+              .where(eq(deptSchema.departmentMembers.id, targetMember.id))
+              .returning();
+            if (updateResult.length === 0) {
+              throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to update member details in database." });
+            }
+            updatedMemberResult = updateResult[0];
+          } else {
+             // If only role/callsign sync happened, or no permissible fields changed.
+             // Fetch the potentially updated member data (e.g. new callsign from sync)
+            const currentData = await postgrestDb
+                .select() // Select all fields to match typical return
+                .from(deptSchema.departmentMembers)
+                .where(eq(deptSchema.departmentMembers.id, targetMember.id))
+                .limit(1);
+            if (currentData.length === 0) {
+                 throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to retrieve member after potential sync." });
+            }
+            updatedMemberResult = currentData[0];
+          }
+          
+          // If callsign was potentially updated by sync, we need to ensure the returned object reflects this.
+          // The `updatedMemberResult` from the DB might not have the latest callsign if it was purely a sync op.
+          // However, `syncMemberRolesAndCallsign` internally updates the DB callsign.
+          // So, re-fetching as done above if `memberUpdatePayload` is empty should be okay.
+
+          return updatedMemberResult;
+
+        }),
+    }),
 
     // ===== PROMOTION/DEMOTION SYSTEM =====
     promotions: createTRPCRouter({

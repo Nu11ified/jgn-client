@@ -40,7 +40,11 @@ import {
   Activity,
   Star,
   PauseCircle,
-  Info
+  Info,
+  Pencil,
+  Loader2,
+  ShieldBan,
+  CalendarClock
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { toast } from "sonner";
@@ -187,7 +191,7 @@ export default function MemberDetailsPage() {
     departmentId,
     memberId,
   }, {
-    enabled: !!(timeclockViewPermission?.hasPermission ?? false) || !!(timeclockManagePermission?.hasPermission ?? false) && !!memberData
+    enabled: (!!(timeclockViewPermission?.hasPermission ?? false) || !!(timeclockManagePermission?.hasPermission ?? false) || !!(permissions?.hasPermission ?? false)) && !!memberData
   });
 
   // Get member's time history
@@ -196,7 +200,7 @@ export default function MemberDetailsPage() {
     memberId,
     limit: 10, // Show last 10 entries
   }, {
-    enabled: !!(timeclockViewPermission?.hasPermission ?? false) || !!(timeclockManagePermission?.hasPermission ?? false) && !!memberData
+    enabled: (!!(timeclockViewPermission?.hasPermission ?? false) || !!(timeclockManagePermission?.hasPermission ?? false)) && !!memberData
   });
 
   // Get member's promotion history for performance view
@@ -215,8 +219,15 @@ export default function MemberDetailsPage() {
     { enabled: !!memberData && !!(permissions?.hasPermission ?? false) }
   );
 
+  // Individual permission checks
+  const canPromote = promotePermission?.hasPermission ?? false;
+  const canDemote = demotePermission?.hasPermission ?? false;
+  const canDiscipline = disciplinePermission?.hasPermission ?? false;
+  const canViewTimeclock = (timeclockViewPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
+  const canEditTimeclock = (timeclockEditPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
+
   // Mutations with sync notifications
-  const updateMemberMutation = api.dept.admin.members.update.useMutation({
+  const updateMemberMutation = api.dept.user.members.update.useMutation({
     onSuccess: (result) => {
       showQuickSuccess("Member updated successfully");
       setIsEditing(false);
@@ -276,7 +287,7 @@ export default function MemberDetailsPage() {
   });
 
   // Add notes update mutation
-  const updateNotesMutation = api.dept.admin.members.update.useMutation({
+  const updateNotesMutation = api.dept.user.members.update.useMutation({
     onSuccess: () => {
       showQuickSuccess("Notes updated successfully");
       void refetchMember();
@@ -447,14 +458,6 @@ export default function MemberDetailsPage() {
       value: '',
     });
   };
-
-  // Simplified permissions - let backend handle authorization
-  const canEdit = permissions?.hasPermission;
-  const canPromote = promotePermission?.hasPermission;
-  const canDemote = demotePermission?.hasPermission;
-  const canDiscipline = disciplinePermission?.hasPermission;
-  const canViewTimeclock = (timeclockViewPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
-  const canEditTimeclock = (timeclockEditPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
 
   const getStatusColor = (status: MemberStatus) => {
     switch (status) {
@@ -667,7 +670,8 @@ export default function MemberDetailsPage() {
             </div>
           </div>
           
-          {canEdit && (
+          {/* Ensure this entire block is conditional on manage_members permission */}
+          {(permissions?.hasPermission ?? false) && (
             <div className="flex items-center space-x-2">
               {isEditing ? (
                 <>
@@ -777,35 +781,34 @@ export default function MemberDetailsPage() {
 
                     <div>
                       <label className="text-sm font-medium">Status</label>
-                      {isEditing && canDiscipline ? (
+                      {/* Simplified condition: if isEditing, manage_members is implied by outer check */}
+                      {isEditing ? (
                         <Select
                           value={editData.status}
-                          onValueChange={(value: MemberStatus) => setEditData(prev => ({ ...prev, status: value }))}
+                          onValueChange={(value) => setEditData(prev => ({ ...prev, status: value as MemberStatus }))}
                         >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="active">Active</SelectItem>
                             <SelectItem value="in_training">In Training</SelectItem>
-                            <SelectItem value="pending">Pending</SelectItem>
+                            <SelectItem value="pending">Pending Assignment</SelectItem>
+                            <SelectItem value="active">Active</SelectItem>
                             <SelectItem value="inactive">Inactive</SelectItem>
                             <SelectItem value="leave_of_absence">Leave of Absence</SelectItem>
-                            <SelectItem value="warned_1">Warned (Level 1)</SelectItem>
-                            <SelectItem value="warned_2">Warned (Level 2)</SelectItem>
-                            <SelectItem value="warned_3">Warned (Level 3)</SelectItem>
+                            <SelectItem value="warned_1">Warning Level 1</SelectItem>
+                            <SelectItem value="warned_2">Warning Level 2</SelectItem>
+                            <SelectItem value="warned_3">Warning Level 3</SelectItem>
                             <SelectItem value="suspended">Suspended</SelectItem>
                             <SelectItem value="blacklisted">Blacklisted</SelectItem>
                           </SelectContent>
                         </Select>
-                      ) : memberData.status ? (
-                        <Badge className={getStatusColor(memberData.status)}>
-                          {formatStatus(memberData.status)}
-                        </Badge>
                       ) : (
-                        <Badge className="bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-800/20 dark:text-gray-400 dark:border-gray-700">
-                          Unknown
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge className={getStatusColor(memberData?.status ?? 'inactive')}>
+                            {formatStatus(memberData?.status ?? 'inactive')}
+                          </Badge>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -816,7 +819,8 @@ export default function MemberDetailsPage() {
                   <div className="space-y-3">
                     <div>
                       <label className="text-sm font-medium">Rank</label>
-                      {isEditing && (canPromote || canDemote) ? (
+                      {/* Simplified condition: if isEditing, manage_members is implied by outer check */}
+                      {isEditing ? (
                         <Select
                           value={editData.rankId?.toString() ?? '_none_'}
                           onValueChange={(value) => setEditData(prev => ({ ...prev, rankId: value !== '_none_' ? parseInt(value) : undefined }))}
@@ -1242,296 +1246,298 @@ export default function MemberDetailsPage() {
                 )}
 
                 {/* Notes and Actions */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <FileText className="h-5 w-5" />
-                      Notes & Actions
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {/* Notes */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-sm font-medium">Notes</label>
-                        {!isEditing && !notesState.isEditing && canEdit && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={startEditingNotes}
-                            className="h-8 px-2"
-                          >
-                            <Edit className="h-3 w-3 mr-1" />
-                            Edit
-                          </Button>
-                        )}
-                      </div>
-                      {isEditing ? (
-                        <Textarea
-                          value={editData.notes}
-                          onChange={(e) => setEditData(prev => ({ ...prev, notes: e.target.value }))}
-                          placeholder="Add notes about this member..."
-                          rows={4} />
-                      ) : notesState.isEditing ? (
-                        <div className="space-y-2">
+                {(permissions?.hasPermission ?? false) && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <FileText className="h-5 w-5" />
+                        Notes & Actions
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {/* Notes */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-sm font-medium">Notes</label>
+                          {!isEditing && !notesState.isEditing && (permissions?.hasPermission ?? false) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={startEditingNotes}
+                              className="h-8 px-2"
+                            >
+                              <Edit className="h-3 w-3 mr-1" />
+                              Edit
+                            </Button>
+                          )}
+                        </div>
+                        {isEditing ? (
                           <Textarea
-                            value={notesState.value}
-                            onChange={(e) => setNotesState(prev => ({ ...prev, value: e.target.value }))}
+                            value={editData.notes}
+                            onChange={(e) => setEditData(prev => ({ ...prev, notes: e.target.value }))}
                             placeholder="Add notes about this member..."
                             rows={4} />
-                          <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              onClick={saveNotes}
-                              disabled={updateNotesMutation.isPending}
-                            >
-                              <Save className="h-3 w-3 mr-1" />
-                              {updateNotesMutation.isPending ? "Saving..." : "Save"}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={cancelEditingNotes}
-                            >
-                              <X className="h-3 w-3 mr-1" />
-                              Cancel
-                            </Button>
+                        ) : notesState.isEditing ? (
+                          <div className="space-y-2">
+                            <Textarea
+                              value={notesState.value}
+                              onChange={(e) => setNotesState(prev => ({ ...prev, value: e.target.value }))}
+                              placeholder="Add notes about this member..."
+                              rows={4} />
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                onClick={saveNotes}
+                                disabled={updateNotesMutation.isPending}
+                              >
+                                <Save className="h-3 w-3 mr-1" />
+                                {updateNotesMutation.isPending ? "Saving..." : "Save"}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={cancelEditingNotes}
+                              >
+                                <X className="h-3 w-3 mr-1" />
+                                Cancel
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground min-h-[100px] p-2 border rounded whitespace-pre-wrap">
-                          {memberData.notes ?? 'No notes'}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Quick Actions */}
-                    {!isEditing && (
-                      <div className="space-y-3">
-                        <Separator />
-                        <div>
-                          <h4 className="text-sm font-medium mb-3">Quick Actions</h4>
-
-                          <div className="grid gap-2">
-                            {canPromote && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="justify-start"
-                                disabled={promoteMutation.isPending}
-                                onClick={() => {
-                                  if (!memberData.rankId) {
-                                    // Member has no rank, promote to lowest rank
-                                    const lowestRank = departmentInfo?.ranks
-                                      ?.sort((a, b) => a.level - b.level)[0]; // Get lowest level rank
-
-                                    if (lowestRank) {
-                                      handlePromote(lowestRank.id, 'Initial rank assignment');
-                                    } else {
-                                      showQuickError("No ranks available in this department");
-                                    }
-                                    return;
-                                  }
-
-                                  const currentRankLevel = memberData.rankLevel ?? 0;
-                                  // Sort ranks by level and find the next higher rank
-                                  const higherRanks = departmentInfo?.ranks
-                                    ?.filter(rank => rank.level > currentRankLevel)
-                                    ?.sort((a, b) => a.level - b.level); // Sort ascending to get lowest higher rank first
-
-                                  if (higherRanks && higherRanks.length > 0) {
-                                    const nextRank = higherRanks[0]; // Get the next rank (lowest higher rank)
-                                    if (nextRank) {
-                                      handlePromote(nextRank.id, 'Quick promotion');
-                                    }
-                                  } else {
-                                    showQuickError("No higher rank available for promotion");
-                                  }
-                                } }
-                              >
-                                <TrendingUp className="h-4 w-4 mr-2" />
-                                {promoteMutation.isPending ? "Promoting..." : (memberData.rankId ? "Promote" : "Assign Rank")}
-                              </Button>
-                            )}
-
-                            {canDemote && memberData.rankId && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="justify-start"
-                                disabled={demoteMutation.isPending}
-                                onClick={() => {
-                                  const currentRankLevel = memberData.rankLevel ?? 0;
-                                  // Sort ranks by level and find the next lower rank
-                                  const lowerRanks = departmentInfo?.ranks
-                                    ?.filter(rank => rank.level < currentRankLevel)
-                                    ?.sort((a, b) => b.level - a.level); // Sort descending to get highest lower rank first
-
-                                  if (lowerRanks && lowerRanks.length > 0) {
-                                    const prevRank = lowerRanks[0]; // Get the previous rank (highest lower rank)
-                                    if (prevRank) {
-                                      handleDemote(prevRank.id, 'Quick demotion');
-                                    }
-                                  } else {
-                                    showQuickError("No lower rank available for demotion");
-                                  }
-                                } }
-                              >
-                                <TrendingDown className="h-4 w-4 mr-2" />
-                                {demoteMutation.isPending ? "Demoting..." : "Demote"}
-                              </Button>
-                            )}
-
-                            {canDemote && memberData.rankId && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="justify-start text-gray-600 hover:text-gray-700"
-                                disabled={updateMemberMutation.isPending}
-                                onClick={() => {
-                                  updateMemberMutation.mutate({
-                                    id: memberId,
-                                    rankId: null,
-                                  });
-                                } }
-                              >
-                                <UserX className="h-4 w-4 mr-2" />
-                                Remove Rank
-                              </Button>
-                            )}
-
-                            {canDiscipline && (
-                              <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start text-orange-600 hover:text-orange-700"
-                                  onClick={() => openDisciplineDialog('warn')}
-                                  disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
-                                >
-                                  <AlertTriangle className="h-4 w-4 mr-2" />
-                                  {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
-                                </Button>
-
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start text-red-600 hover:text-red-700"
-                                  onClick={() => openDisciplineDialog('suspend')}
-                                  disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
-                                >
-                                  <Ban className="h-4 w-4 mr-2" />
-                                  {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Suspend"}
-                                </Button>
-                              </>
-                            )}
-
-                            {canDiscipline && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="justify-start text-purple-600 hover:text-purple-700"
-                                onClick={openLoaDialog}
-                                disabled={loaMutation.isPending || updateMemberMutation.isPending}
-                              >
-                                <Timer className="h-4 w-4 mr-2" />
-                                {loaMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Set LOA"}
-                              </Button>
-                            )}
-
-                            {canDiscipline && memberData.status === 'leave_of_absence' && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="justify-start text-green-600 hover:text-green-700"
-                                onClick={() => {
-                                  // Debug: Log disciplinary actions to see what we have
-                                  console.log('All disciplinary actions:', disciplinaryActions);
-                                  console.log('Member status:', memberData.status);
-                                  
-                                  // Find the active LOA disciplinary action
-                                  const activeLOA = disciplinaryActions?.find(
-                                    (action: DisciplinaryAction) => {
-                                      console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
-                                      return action.isActive && action.actionType === 'leave_of_absence';
-                                    }
-                                  );
-                                  
-                                  console.log('Found active LOA:', activeLOA);
-                                  
-                                  if (activeLOA) {
-                                    // Use dismiss if we found the active LOA
-                                    disciplineDismissMutation.mutate({
-                                      actionId: activeLOA.id,
-                                      reason: 'LOA ended early by management'
-                                    });
-                                  } else {
-                                    // Use the new endLoaMutation for fallback
-                                    console.log('Using fallback: ending LOA with return action + status update');
-                                    endLoaMutation.mutate({
-                                      memberId: memberData.id,
-                                      actionType: 'loa_returned',
-                                      reason: 'LOA ended early by management',
-                                      description: 'LOA ended early by management',
-                                    });
-                                  }
-                                }}
-                                disabled={disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
-                              >
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                                {(disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "End LOA Early"}
-                              </Button>
-                            )}
-
-                            {canDiscipline && memberData.status === 'suspended' && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="justify-start text-green-600 hover:text-green-700"
-                                onClick={() => {
-                                  // Debug: Log disciplinary actions to see what we have
-                                  console.log('All disciplinary actions:', disciplinaryActions);
-                                  console.log('Member status:', memberData.status);
-                                  
-                                  // Find the active suspension disciplinary action
-                                  const activeSuspension = disciplinaryActions?.find(
-                                    (action: DisciplinaryAction) => {
-                                      console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
-                                      return action.isActive && action.actionType === 'suspension';
-                                    }
-                                  );
-                                  
-                                  console.log('Found active suspension:', activeSuspension);
-                                  
-                                  if (activeSuspension) {
-                                    // Use dismiss if we found the active suspension
-                                    disciplineDismissMutation.mutate({
-                                      actionId: activeSuspension.id,
-                                      reason: 'Suspension ended early by management'
-                                    });
-                                  } else {
-                                    // Use the new unsuspendMutation for fallback
-                                    console.log('Using fallback: unsuspending with unsuspended action + status update');
-                                    unsuspendMutation.mutate({
-                                      memberId: memberData.id,
-                                      actionType: 'unsuspended',
-                                      reason: 'Suspension ended early by management',
-                                      description: 'Suspension ended early by management',
-                                    });
-                                  }
-                                }}
-                                disabled={disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
-                              >
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                                {(disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "Unsuspend Member"}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground min-h-[100px] p-2 border rounded whitespace-pre-wrap">
+                            {memberData.notes ?? 'No notes'}
+                          </p>
+                        )}
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+
+                      {/* Quick Actions */}
+                      {!isEditing && (
+                        <div className="space-y-3">
+                          <Separator />
+                          <div>
+                            <h4 className="text-sm font-medium mb-3">Quick Actions</h4>
+
+                            <div className="grid gap-2">
+                              {canPromote && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="justify-start"
+                                  disabled={promoteMutation.isPending}
+                                  onClick={() => {
+                                    if (!memberData.rankId) {
+                                      // Member has no rank, promote to lowest rank
+                                      const lowestRank = departmentInfo?.ranks
+                                        ?.sort((a, b) => a.level - b.level)[0]; // Get lowest level rank
+
+                                      if (lowestRank) {
+                                        handlePromote(lowestRank.id, 'Initial rank assignment');
+                                      } else {
+                                        showQuickError("No ranks available in this department");
+                                      }
+                                      return;
+                                    }
+
+                                    const currentRankLevel = memberData.rankLevel ?? 0;
+                                    // Sort ranks by level and find the next higher rank
+                                    const higherRanks = departmentInfo?.ranks
+                                      ?.filter(rank => rank.level > currentRankLevel)
+                                      ?.sort((a, b) => a.level - b.level); // Sort ascending to get lowest higher rank first
+
+                                    if (higherRanks && higherRanks.length > 0) {
+                                      const nextRank = higherRanks[0]; // Get the next rank (lowest higher rank)
+                                      if (nextRank) {
+                                        handlePromote(nextRank.id, 'Quick promotion');
+                                      }
+                                    } else {
+                                      showQuickError("No higher rank available for promotion");
+                                    }
+                                  } }
+                                >
+                                  <TrendingUp className="h-4 w-4 mr-2" />
+                                  {promoteMutation.isPending ? "Promoting..." : (memberData.rankId ? "Promote" : "Assign Rank")}
+                                </Button>
+                              )}
+
+                              {canDemote && memberData.rankId && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="justify-start"
+                                  disabled={demoteMutation.isPending}
+                                  onClick={() => {
+                                    const currentRankLevel = memberData.rankLevel ?? 0;
+                                    // Sort ranks by level and find the next lower rank
+                                    const lowerRanks = departmentInfo?.ranks
+                                      ?.filter(rank => rank.level < currentRankLevel)
+                                      ?.sort((a, b) => b.level - a.level); // Sort descending to get highest lower rank first
+
+                                    if (lowerRanks && lowerRanks.length > 0) {
+                                      const prevRank = lowerRanks[0]; // Get the previous rank (highest lower rank)
+                                      if (prevRank) {
+                                        handleDemote(prevRank.id, 'Quick demotion');
+                                      }
+                                    } else {
+                                      showQuickError("No lower rank available for demotion");
+                                    }
+                                  } }
+                                >
+                                  <TrendingDown className="h-4 w-4 mr-2" />
+                                  {demoteMutation.isPending ? "Demoting..." : "Demote"}
+                                </Button>
+                              )}
+
+                              {canDemote && memberData.rankId && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="justify-start text-gray-600 hover:text-gray-700"
+                                  disabled={updateMemberMutation.isPending}
+                                  onClick={() => {
+                                    updateMemberMutation.mutate({
+                                      id: memberId,
+                                      rankId: null,
+                                    });
+                                  } }
+                                >
+                                  <UserX className="h-4 w-4 mr-2" />
+                                  Remove Rank
+                                </Button>
+                              )}
+
+                              {canDiscipline && (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="justify-start text-orange-600 hover:text-orange-700"
+                                    onClick={() => openDisciplineDialog('warn')}
+                                    disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                                  >
+                                    <AlertTriangle className="h-4 w-4 mr-2" />
+                                    {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
+                                  </Button>
+
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="justify-start text-red-600 hover:text-red-700"
+                                    onClick={() => openDisciplineDialog('suspend')}
+                                    disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                                  >
+                                    <Ban className="h-4 w-4 mr-2" />
+                                    {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Suspend"}
+                                  </Button>
+                                </>
+                              )}
+
+                              {canDiscipline && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="justify-start text-purple-600 hover:text-purple-700"
+                                  onClick={openLoaDialog}
+                                  disabled={loaMutation.isPending || updateMemberMutation.isPending}
+                                >
+                                  <Timer className="h-4 w-4 mr-2" />
+                                  {loaMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Set LOA"}
+                                </Button>
+                              )}
+
+                              {memberData.status === 'leave_of_absence' && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="justify-start text-green-600 hover:text-green-700"
+                                  onClick={() => {
+                                    // Debug: Log disciplinary actions to see what we have
+                                    console.log('All disciplinary actions:', disciplinaryActions);
+                                    console.log('Member status:', memberData.status);
+                                    
+                                    // Find the active LOA disciplinary action
+                                    const activeLOA = disciplinaryActions?.find(
+                                      (action: DisciplinaryAction) => {
+                                        console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
+                                        return action.isActive && action.actionType === 'leave_of_absence';
+                                      }
+                                    );
+                                    
+                                    console.log('Found active LOA:', activeLOA);
+                                    
+                                    if (activeLOA) {
+                                      // Use dismiss if we found the active LOA
+                                      disciplineDismissMutation.mutate({
+                                        actionId: activeLOA.id,
+                                        reason: 'LOA ended early by management'
+                                      });
+                                    } else {
+                                      // Use the new endLoaMutation for fallback
+                                      console.log('Using fallback: ending LOA with return action + status update');
+                                      endLoaMutation.mutate({
+                                        memberId: memberData.id,
+                                        actionType: 'loa_returned',
+                                        reason: 'LOA ended early by management',
+                                        description: 'LOA ended early by management',
+                                      });
+                                    }
+                                  }}
+                                  disabled={disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-2" />
+                                  {(disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "End LOA Early"}
+                                </Button>
+                              )}
+
+                              {memberData.status === 'suspended' && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="justify-start text-green-600 hover:text-green-700"
+                                  onClick={() => {
+                                    // Debug: Log disciplinary actions to see what we have
+                                    console.log('All disciplinary actions:', disciplinaryActions);
+                                    console.log('Member status:', memberData.status);
+                                    
+                                    // Find the active suspension disciplinary action
+                                    const activeSuspension = disciplinaryActions?.find(
+                                      (action: DisciplinaryAction) => {
+                                        console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
+                                        return action.isActive && action.actionType === 'suspension';
+                                      }
+                                    );
+                                    
+                                    console.log('Found active suspension:', activeSuspension);
+                                    
+                                    if (activeSuspension) {
+                                      // Use dismiss if we found the active suspension
+                                      disciplineDismissMutation.mutate({
+                                        actionId: activeSuspension.id,
+                                        reason: 'Suspension ended early by management'
+                                      });
+                                    } else {
+                                      // Use the new unsuspendMutation for fallback
+                                      console.log('Using fallback: unsuspending with unsuspended action + status update');
+                                      unsuspendMutation.mutate({
+                                        memberId: memberData.id,
+                                        actionType: 'unsuspended',
+                                        reason: 'Suspension ended early by management',
+                                        description: 'Suspension ended early by management',
+                                      });
+                                    }
+                                  }}
+                                  disabled={disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-2" />
+                                  {(disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "Unsuspend Member"}
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
               </div>
             </div>
             <div className="flex justify-center mt-8">

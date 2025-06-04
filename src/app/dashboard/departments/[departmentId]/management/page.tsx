@@ -112,16 +112,13 @@ export default function TrainingManagementPage() {
   });
 
   // Get teams for meeting creation
-  const { data: teams } = api.dept.admin.teams.listByDepartment.useQuery({ 
-    departmentId,
-    includeInactive: false 
+  const { data: departmentData } = api.dept.user.info.getDepartment.useQuery({ 
+    departmentId
   });
 
-  // Get ranks for meeting creation
-  const { data: ranks } = api.dept.admin.ranks.listByDepartment.useQuery({ 
-    departmentId,
-    includeInactive: false 
-  });
+  // Extract teams and ranks from department data
+  const teams = departmentData?.teams;
+  const ranks = departmentData?.ranks;
 
   // Get training management data
   const { data: trainingData, isLoading, error, refetch } = api.dept.user.info.getTrainingManagement.useQuery({

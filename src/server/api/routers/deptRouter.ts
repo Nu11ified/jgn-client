@@ -117,12 +117,120 @@ const updateMemberSchema = z.object({
 const validateApiKey = (apiKey: string): boolean => {
   const validApiKey = process.env.DEPARTMENT_TRAINING_API_KEY;
   if (!validApiKey) {
+    console.error("⚠️ Training API key not configured in environment");
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
       message: "Training API key not configured",
     });
   }
-  return apiKey === validApiKey;
+  
+  // Add timing-safe comparison to prevent timing attacks
+  if (apiKey.length !== validApiKey.length) {
+    return false;
+  }
+  
+  let mismatch = 0;
+  for (let i = 0; i < apiKey.length; i++) {
+    mismatch |= apiKey.charCodeAt(i) ^ validApiKey.charCodeAt(i);
+  }
+  
+  return mismatch === 0;
+};
+
+// Add rate limiting for sync operations
+const syncRateLimiter = new Map<string, { count: number; resetTime: number }>();
+const SYNC_RATE_LIMIT = 10; // Max 10 syncs per minute per user
+const SYNC_RATE_WINDOW = 60000; // 1 minute in milliseconds
+
+const checkSyncRateLimit = (discordId: string): boolean => {
+  const now = Date.now();
+  const userLimit = syncRateLimiter.get(discordId);
+  
+  if (!userLimit || now > userLimit.resetTime) {
+    syncRateLimiter.set(discordId, { count: 1, resetTime: now + SYNC_RATE_WINDOW });
+    return true;
+  }
+  
+  if (userLimit.count >= SYNC_RATE_LIMIT) {
+    return false;
+  }
+  
+  userLimit.count++;
+  return true;
+};
+
+// Enhanced sync wrapper with proper error handling and validation
+const performSecureSync = async (params: {
+  discordId: string;
+  departmentId: number;
+  memberId: number;
+  roleChanges?: RoleChangeAction[];
+  skipRoleManagement?: boolean;
+  requireTransaction?: boolean;
+}): Promise<{ success: boolean; message: string; syncResult?: Awaited<ReturnType<typeof syncMemberRolesAndCallsign>> }> => {
+  const { discordId, departmentId, memberId, roleChanges = [], skipRoleManagement = false, requireTransaction = false } = params;
+  
+  try {
+    // Check rate limit
+    if (!checkSyncRateLimit(discordId)) {
+      return {
+        success: false,
+        message: "Rate limit exceeded. Please wait before syncing again.",
+      };
+    }
+    
+    // Validate member exists and is active
+    const member = await postgrestDb
+      .select({
+        id: deptSchema.departmentMembers.id,
+        isActive: deptSchema.departmentMembers.isActive,
+        status: deptSchema.departmentMembers.status,
+      })
+      .from(deptSchema.departmentMembers)
+      .where(
+        and(
+          eq(deptSchema.departmentMembers.id, memberId),
+          eq(deptSchema.departmentMembers.discordId, discordId),
+          eq(deptSchema.departmentMembers.departmentId, departmentId)
+        )
+      )
+      .limit(1);
+    
+    if (member.length === 0) {
+      return {
+        success: false,
+        message: "Member not found or mismatched data",
+      };
+    }
+    
+    if (!member[0]!.isActive) {
+      return {
+        success: false,
+        message: "Cannot sync inactive member",
+      };
+    }
+    
+    // Perform the sync
+    const syncResult = await syncMemberRolesAndCallsign({
+      discordId,
+      departmentId,
+      memberId,
+      roleChanges,
+      skipRoleManagement,
+    });
+    
+    return {
+      success: syncResult.success,
+      message: syncResult.message,
+      syncResult,
+    };
+  } catch (error) {
+    console.error("❌ Secure sync failed:", error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : "Unknown sync error",
+    };
+  }
 };
 
 // Training-related schemas
@@ -1552,35 +1660,23 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // First, add Discord role if team has one and member is active
-            if (team[0]!.discordRoleId && memberData.isActive) {
-              const serverId = await getServerIdFromRoleId(team[0]!.discordRoleId);
-              if (serverId) {
-                await manageDiscordRole(
-                  'add',
-                  memberData.discordId,
-                  team[0]!.discordRoleId,
-                  serverId
-                );
-              }
-            }
-
-            // Wait a moment for Discord role changes to propagate
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            // Now sync the database based on actual Discord roles
-            const teamUpdateResult = await updateUserTeamFromDiscordRoles(memberData.discordId, memberData.departmentId);
+            // Use the centralized secure sync function to handle team assignment
+            const roleChanges = await createTeamRoleChanges(null, input.teamId, memberData.departmentId);
             
-            if (!teamUpdateResult.success) {
-              console.warn('Discord team role sync had issues:', teamUpdateResult);
-            }
+            const syncResult = await performSecureSync({
+              discordId: memberData.discordId,
+              departmentId: memberData.departmentId,
+              memberId: memberData.id,
+              roleChanges,
+              skipRoleManagement: false,
+            });
 
-            // Fire-and-forget background sync for callsign
-            void syncMemberRolesAndCallsignInBackground(
-              memberData.discordId,
-              memberData.departmentId,
-              memberData.id
-            );
+            if (!syncResult.success) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: `Failed to add team member: ${syncResult.message}`,
+              });
+            }
 
             // Add team membership record with leadership flag
             const result = await postgrestDb
@@ -1658,10 +1754,10 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Use the new centralized sync function to handle Discord role changes and database sync
+            // Use the centralized secure sync function to handle Discord role changes and database sync
             const roleChanges = await createTeamRoleChanges(input.teamId, null, membershipData.departmentId);
             
-            const syncResult = await syncMemberRolesAndCallsign({
+            const syncResult = await performSecureSync({
               discordId: membershipData.discordId,
               departmentId: membershipData.departmentId,
               memberId: input.memberId,
@@ -2139,7 +2235,7 @@ export const deptRouter = createTRPCRouter({
                   });
                 } else {
                   // Run Discord sync synchronously (original behavior)
-                  const syncResult = await syncMemberRolesAndCallsign({
+                  const syncResult = await performSecureSync({
                     discordId: input.discordId,
                     departmentId: input.departmentId,
                     memberId: createdMember.id,
@@ -2312,7 +2408,7 @@ export const deptRouter = createTRPCRouter({
 
             // Apply role changes if any exist
             if (roleChanges.length > 0) {
-              const syncResult = await syncMemberRolesAndCallsign({
+              const syncResult = await performSecureSync({
                 discordId: currentMember.discordId,
                 departmentId: currentMember.departmentId,
                 memberId: currentMember.id,
@@ -2325,11 +2421,13 @@ export const deptRouter = createTRPCRouter({
               }
             } else if (updateData.rankId !== undefined || updateData.primaryTeamId !== undefined) {
               // If rank/team changed but no Discord roles, still trigger background sync for callsign
-              void syncMemberRolesAndCallsignInBackground(
-                currentMember.discordId,
-                currentMember.departmentId,
-                currentMember.id
-              );
+              void performSecureSync({
+                discordId: currentMember.discordId,
+                departmentId: currentMember.departmentId,
+                memberId: currentMember.id,
+                roleChanges: [],
+                skipRoleManagement: true,
+              });
             }
 
             // Prepare update data for non-role/team fields only
@@ -2823,10 +2921,10 @@ export const deptRouter = createTRPCRouter({
                 message: "Team and member are not in the same department",
               });
             }
-            // Use the centralized sync function to handle team assignment
+            // Use the centralized secure sync function to handle team assignment
             const roleChanges = await createTeamRoleChanges(null, input.teamId, member.departmentId);
             
-            const syncResult = await syncMemberRolesAndCallsign({
+            const syncResult = await performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
               memberId: member.id,
@@ -3531,7 +3629,7 @@ export const deptRouter = createTRPCRouter({
           }
 
           if (callsignNeedsSync) {
-             const syncResult = await syncMemberRolesAndCallsign({
+             const syncResult = await performSecureSync({
                 discordId: targetMember.discordId,
                 departmentId: targetMember.departmentId,
                 memberId: targetMember.id,
@@ -3540,7 +3638,11 @@ export const deptRouter = createTRPCRouter({
               });
               if (!syncResult.success) {
                 console.warn(`⚠️ Role/Callsign sync had issues for member ${targetMember.id}: ${syncResult.message}`);
-                // Decide if this should be a TRPCError or just a warning
+                // For user-initiated updates, throw error if sync fails
+                throw new TRPCError({
+                  code: "INTERNAL_SERVER_ERROR",
+                  message: `Failed to sync member roles: ${syncResult.message}`,
+                });
               }
           }
           
@@ -3749,7 +3851,7 @@ export const deptRouter = createTRPCRouter({
             // Use the new centralized sync function to handle Discord role changes and database sync
             const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
             
-            const syncResult = await syncMemberRolesAndCallsign({
+            const syncResult = await performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
               memberId: member.id,
@@ -3903,7 +4005,7 @@ export const deptRouter = createTRPCRouter({
             // Use the new centralized sync function to handle Discord role changes and database sync
             const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
             
-            const syncResult = await syncMemberRolesAndCallsign({
+            const syncResult = await performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
               memberId: member.id,

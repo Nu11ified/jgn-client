@@ -386,7 +386,7 @@ export const departmentMembers = createDepartmentTable(
     roleplayName: d.varchar("roleplay_name", { length: 100 }), // Custom RP character name
     rankId: d.integer("rank_id").references(() => departmentRanks.id, { onDelete: "set null" }),
     badgeNumber: d.varchar("badge_number", { length: 20 }), // Optional badge/unit number
-    departmentIdNumber: d.integer("department_id_number").unique(), // Unique 3-digit number (100-999) - recyclable
+    departmentIdNumber: d.integer("department_id_number"), // Unique 3-digit number (100-999) - recyclable
     callsign: d.varchar("callsign", { length: 30 }), // Auto-generated: DEPT-TEAM-###
     primaryTeamId: d.integer("primary_team_id").references(() => departmentTeams.id, { onDelete: "set null" }), // Primary team for callsign generation
     status: d.varchar("status", { length: 50, enum: departmentMemberStatusEnum.options }).default("in_training").notNull(),

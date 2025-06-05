@@ -10,7 +10,7 @@ import { env } from "@/env";
 // Import the new department services
 import {
   syncMemberRolesAndCallsign,
-  syncMemberRolesAndCallsignInBackground,
+  //syncMemberRolesAndCallsignInBackground,
   createRankRoleChanges,
   createTeamRoleChanges,
   updateUserRankFromDiscordRoles,
@@ -25,8 +25,8 @@ import {
   type RoleChangeAction,
 } from "@/server/api/services/department";
 
-const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
-const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
+//const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
+//const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
 
 // Zod validation schemas for input validation
 const createDepartmentSchema = z.object({

@@ -278,6 +278,14 @@ export type NewDepartmentPromotionHistory = InsertType<typeof departmentPromotio
 export type DepartmentDisciplinaryAction = SelectType<typeof departmentDisciplinaryActions>;
 export type NewDepartmentDisciplinaryAction = InsertType<typeof departmentDisciplinaryActions>;
 
+// Department Certification types
+export type DepartmentCertification = SelectType<typeof departmentCertifications>;
+export type NewDepartmentCertification = InsertType<typeof departmentCertifications>;
+
+// Department Member Certification types
+export type DepartmentMemberCertification = SelectType<typeof departmentMemberCertifications>;
+export type NewDepartmentMemberCertification = InsertType<typeof departmentMemberCertifications>;
+
 // Table for Ranks within Departments
 export const departmentRanks = createDepartmentTable(
   "ranks",
@@ -602,6 +610,63 @@ export const departmentDisciplinaryActions = createDepartmentTable(
   ]
 );
 
+// Table for Certifications within Departments
+export const departmentCertifications = createDepartmentTable(
+  "certifications",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    departmentId: d
+      .integer("department_id")
+      .references(() => departments.id, { onDelete: "cascade" })
+      .notNull(),
+    name: d.varchar("name", { length: 256 }).notNull(),
+    description: d.text("description"),
+    abbreviation: d.varchar("abbreviation", { length: 20 }), // e.g., "FTO", "EMT-B"
+    createdAt: d
+      .timestamp("created_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("cert_dept_idx").on(t.departmentId),
+    index("cert_name_idx").on(t.name),
+    unique("unique_cert_per_dept").on(t.departmentId, t.name),
+  ],
+);
+
+// Table for Member Certifications (Junction)
+export const departmentMemberCertifications = createDepartmentTable(
+  "member_certifications",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    memberId: d
+      .integer("member_id")
+      .references(() => departmentMembers.id, { onDelete: "cascade" })
+      .notNull(),
+    certificationId: d
+      .integer("certification_id")
+      .references(() => departmentCertifications.id, { onDelete: "cascade" })
+      .notNull(),
+    issuedAt: d
+      .timestamp("issued_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    expiresAt: d.timestamp("expires_at", { withTimezone: true }),
+    issuedBy: d.text("issued_by").notNull(), // Discord User ID of issuer
+    notes: d.text("notes"),
+    createdAt: d
+      .timestamp("created_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  }),
+  (t) => [
+    index("member_cert_member_idx").on(t.memberId),
+    index("member_cert_cert_idx").on(t.certificationId),
+    unique("unique_member_certification").on(t.memberId, t.certificationId),
+  ],
+);
+
 // --- RELATIONS ---
 export const departmentsRelations = relations(departments, ({ many }) => ({
   ranks: many(departmentRanks),
@@ -609,6 +674,7 @@ export const departmentsRelations = relations(departments, ({ many }) => ({
   members: many(departmentMembers),
   meetings: many(departmentMeetings),
   idNumbers: many(departmentIdNumbers),
+  certifications: many(departmentCertifications),
 }));
 
 export const departmentRanksRelations = relations(departmentRanks, ({ one, many }) => ({
@@ -654,6 +720,7 @@ export const departmentMembersRelations = relations(departmentMembers, ({ one, m
   meetingAttendance: many(departmentMeetingAttendance),
   promotionHistory: many(departmentPromotionHistory),
   disciplinaryActions: many(departmentDisciplinaryActions),
+  certifications: many(departmentMemberCertifications),
 }));
 
 export const departmentTeamMembershipsRelations = relations(departmentTeamMemberships, ({ one }) => ({
@@ -729,6 +796,25 @@ export const departmentDisciplinaryActionsRelations = relations(departmentDiscip
   member: one(departmentMembers, {
     fields: [departmentDisciplinaryActions.memberId],
     references: [departmentMembers.id],
+  }),
+}));
+
+export const departmentCertificationsRelations = relations(departmentCertifications, ({ one, many }) => ({
+  department: one(departments, {
+    fields: [departmentCertifications.departmentId],
+    references: [departments.id],
+  }),
+  memberCertifications: many(departmentMemberCertifications),
+}));
+
+export const departmentMemberCertificationsRelations = relations(departmentMemberCertifications, ({ one }) => ({
+  member: one(departmentMembers, {
+    fields: [departmentMemberCertifications.memberId],
+    references: [departmentMembers.id],
+  }),
+  certification: one(departmentCertifications, {
+    fields: [departmentMemberCertifications.certificationId],
+    references: [departmentCertifications.id],
   }),
 }));
 

@@ -5,7 +5,6 @@ import { TRPCError } from "@trpc/server";
 import { postgrestDb } from "@/server/postgres";
 import * as deptSchema from "@/server/postgres/schema/department";
 import type { RankLimitInfo, RankLimitValidationResult } from "@/server/postgres/schema/department";
-import { env } from "@/env";
 
 // Import the new department services
 import {

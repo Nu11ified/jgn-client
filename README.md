@@ -25,8 +25,8 @@ graph TD
     end
 
     subgraph "Databases"
-        C[PostgreSQL Database<br>(Department Data)]
-        D[MySQL Database<br>(User & Auth Data)]
+        C["PostgreSQL Database<br>(Department Data)"]
+        D["MySQL Database<br>(User & Auth Data)"]
     end
 
     subgraph "External Services"

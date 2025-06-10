@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { 
   ArrowLeft, 
   Edit,
@@ -44,7 +45,8 @@ import {
   Pencil,
   Loader2,
   ShieldBan,
-  CalendarClock
+  CalendarClock,
+  Trash2
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { toast } from "sonner";
@@ -60,14 +62,6 @@ import { formatLocalDateTime, formatLocalDate, formatDuration } from "@/lib/util
 import { useSyncNotifications } from "@/hooks/useSyncNotifications";
 
 type MemberStatus = "in_training" | "pending" | "active" | "inactive" | "leave_of_absence" | "warned_1" | "warned_2" | "warned_3" | "suspended" | "blacklisted";
-
-type PromotionHistory = {
-  id: number;
-  promotedBy: string;
-  reason: string | null;
-  effectiveDate: Date;
-  notes: string | null;
-};
 
 type DisciplinaryAction = {
   id: number;
@@ -107,6 +101,8 @@ export default function MemberDetailsPage() {
     reason: '',
   });
 
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+
   // Add state for notes editing
   const [notesState, setNotesState] = useState<{
     isEditing: boolean;
@@ -117,7 +113,7 @@ export default function MemberDetailsPage() {
   });
 
   // Add sync notifications hook
-  const { showSyncStatus, showQuickSuccess, showQuickError } = useSyncNotifications();
+  const { showQuickSuccess, showQuickError } = useSyncNotifications();
 
   // Get member details using the memberIdFilter
   const { data: rosterData, isLoading: memberLoading, refetch: refetchMember } = api.dept.user.info.getDepartmentRoster.useQuery({
@@ -125,12 +121,6 @@ export default function MemberDetailsPage() {
     includeInactive: true,
     memberIdFilter: memberId,
     limit: 1,
-  });
-
-  // Get the full department roster to look up issuer names
-  const { data: fullRosterData } = api.dept.user.info.getDepartmentRoster.useQuery({
-    departmentId,
-    includeInactive: true, // Include inactive members as they might have issued past actions
   });
 
   // Find the specific member from roster data
@@ -170,17 +160,10 @@ export default function MemberDetailsPage() {
     permission: 'manage_timeclock'
   });
 
-  const { data: timeclockEditPermission } = api.dept.user.checkPermission.useQuery({ 
-    departmentId,
-    permission: 'edit_timeclock'
-  });
-
   // Get current user's information to check rank hierarchy and prevent self-editing
   const { data: currentUserInfo } = api.dept.user.info.getDepartmentRoster.useQuery({
     departmentId,
     includeInactive: false,
-    memberIdFilter: undefined, // Get current user
-    limit: 1,
   });
 
   // Get current user's Discord ID to identify themselves
@@ -224,7 +207,23 @@ export default function MemberDetailsPage() {
   const canDemote = demotePermission?.hasPermission ?? false;
   const canDiscipline = disciplinePermission?.hasPermission ?? false;
   const canViewTimeclock = (timeclockViewPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
-  const canEditTimeclock = (timeclockEditPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
+
+  // Check if user is trying to act on themselves, and check rank hierarchy
+  const isActingOnSelf = currentUser?.discordId === memberData?.discordId;
+  const currentUserMember = currentUserInfo?.members?.find(m => m.discordId === currentUser?.discordId);
+  const currentUserRankLevel = currentUserMember?.rankLevel ?? 0;
+  const targetMemberRankLevel = memberData?.rankLevel ?? 0;
+  const canManageBasedOnRank = !isActingOnSelf && currentUserRankLevel > targetMemberRankLevel;
+
+  // Temporary log for debugging rank permissions
+  if (memberData) {
+    console.log("Rank Permission Debug:", {
+      isActingOnSelf,
+      currentUserRankLevel,
+      targetMemberRankLevel,
+      canManageBasedOnRank,
+    });
+  }
 
   // Mutations with sync notifications
   const updateMemberMutation = api.dept.user.members.update.useMutation({
@@ -295,6 +294,17 @@ export default function MemberDetailsPage() {
     onError: (error) => {
       showQuickError(`Failed to update notes: ${error.message}`);
     },
+  });
+
+  const deleteMemberMutation = api.dept.admin.members.memberDeletion.useMutation({
+    onSuccess: () => {
+      toast.success("Member deleted successfully.");
+      router.push(`/dashboard/departments/${departmentId}/roster`);
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to delete member: ${error instanceof Error ? error.message : "An unknown error occurred"}`);
+      setIsDeleteDialogOpen(false); // Close dialog on error
+    }
   });
 
   // Add state for LOA dialog
@@ -373,21 +383,11 @@ export default function MemberDetailsPage() {
     });
   };
 
-  const handleDiscipline = (action: 'warn' | 'suspend', reason?: string) => {
+  const handleDeleteMember = () => {
     if (!memberData) return;
-    
-    const actionTypeMap = {
-      'warn': 'warning',
-      'suspend': 'suspension',
-    };
-    
-    // Issue disciplinary action only; backend will update status
-    disciplineIssueMutation.mutate({
+    deleteMemberMutation.mutate({
+      departmentId: departmentId,
       memberId: memberData.id,
-      actionType: actionTypeMap[action],
-      reason: reason ?? `${action === 'warn' ? 'Warning' : 'Suspension'} issued via member management`,
-      description: `${action === 'warn' ? 'Warning' : 'Suspension'} issued by management for: ${reason ?? 'No specific reason provided'}`,
-      expiresAt: action === 'suspend' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : undefined, // 30 days for suspension
     });
   };
 
@@ -641,13 +641,6 @@ export default function MemberDetailsPage() {
     );
   }
 
-  // Check if user is trying to edit themselves
-  const isEditingSelf = currentUser?.discordId === memberData?.discordId;
-  
-  // Get current user's rank information from the roster
-  const currentUserMember = currentUserInfo?.members?.find(m => m.discordId === currentUser?.discordId);
-  const currentUserRankLevel = currentUserMember?.rankLevel ?? 0;
-  const targetMemberRankLevel = memberData?.rankLevel ?? 0;
   return (
     <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
       <div className="space-y-6">
@@ -694,22 +687,38 @@ export default function MemberDetailsPage() {
                   </Button>
                 </>
               ) : (
-                <Button 
-                  onClick={() => {
-                    setIsEditing(true);
-                    setEditData({
-                      roleplayName: memberData?.roleplayName ?? '',
-                      badgeNumber: memberData?.badgeNumber ?? '',
-                      notes: memberData?.notes ?? '',
-                      status: memberData?.status,
-                      rankId: memberData?.rankId ?? undefined,
-                      primaryTeamId: memberData?.primaryTeamId ?? undefined,
-                    });
-                  }}
-                >
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit Member
-                </Button>
+                <TooltipProvider>
+                  <Tooltip delayDuration={100}>
+                    <TooltipTrigger asChild>
+                      <div tabIndex={0}>
+                        <Button 
+                          onClick={() => {
+                            setIsEditing(true);
+                            setEditData({
+                              roleplayName: memberData?.roleplayName ?? '',
+                              badgeNumber: memberData?.badgeNumber ?? '',
+                              notes: memberData?.notes ?? '',
+                              status: memberData?.status,
+                              rankId: memberData?.rankId ?? undefined,
+                              primaryTeamId: memberData?.primaryTeamId ?? undefined,
+                            });
+                          }}
+                          disabled={isActingOnSelf || !canManageBasedOnRank}
+                        >
+                          <Edit className="h-4 w-4 mr-2" />
+                          Edit Member
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    {(isActingOnSelf || !canManageBasedOnRank) && (
+                      <TooltipContent>
+                        {isActingOnSelf
+                          ? <p>You cannot manage yourself.</p>
+                          : <p>You cannot manage a member of an equal or higher rank.</p>}
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
               )}
             </div>
           )}
@@ -718,7 +727,7 @@ export default function MemberDetailsPage() {
         {statusBanner}
 
         {/* If member is not active AND viewing own profile, show access restriction message */}
-        {memberData && memberData.status !== 'active' && isEditingSelf ? (
+        {memberData && memberData.status !== 'active' && isActingOnSelf ? (
           <div className="my-8 p-6 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-900 rounded-md">
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="h-5 w-5 text-yellow-600" />
@@ -732,7 +741,7 @@ export default function MemberDetailsPage() {
         ) : null}
 
         {/* Always show member details to management, only restrict if user is viewing own restricted profile */}
-        {!(memberData && memberData.status !== 'active' && isEditingSelf) && (
+        {!(memberData && memberData.status !== 'active' && isActingOnSelf) && (
           <>
             <div className="grid gap-6 lg:grid-cols-2">
               {/* Member Information */}
@@ -783,26 +792,37 @@ export default function MemberDetailsPage() {
                       <label className="text-sm font-medium">Status</label>
                       {/* Simplified condition: if isEditing, manage_members is implied by outer check */}
                       {isEditing ? (
-                        <Select
-                          value={editData.status}
-                          onValueChange={(value) => setEditData(prev => ({ ...prev, status: value as MemberStatus }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="in_training">In Training</SelectItem>
-                            <SelectItem value="pending">Pending Assignment</SelectItem>
-                            <SelectItem value="active">Active</SelectItem>
-                            <SelectItem value="inactive">Inactive</SelectItem>
-                            <SelectItem value="leave_of_absence">Leave of Absence</SelectItem>
-                            <SelectItem value="warned_1">Warning Level 1</SelectItem>
-                            <SelectItem value="warned_2">Warning Level 2</SelectItem>
-                            <SelectItem value="warned_3">Warning Level 3</SelectItem>
-                            <SelectItem value="suspended">Suspended</SelectItem>
-                            <SelectItem value="blacklisted">Blacklisted</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        <>
+                          <Select
+                            value={editData.status}
+                            onValueChange={(value) => setEditData(prev => ({ ...prev, status: value as MemberStatus }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="in_training">In Training</SelectItem>
+                              <SelectItem value="pending">Pending Assignment</SelectItem>
+                              <SelectItem value="active">Active</SelectItem>
+                              <SelectItem value="inactive">Inactive</SelectItem>
+                              <SelectItem value="leave_of_absence">Leave of Absence</SelectItem>
+                              <SelectItem value="warned_1">Warning Level 1</SelectItem>
+                              <SelectItem value="warned_2">Warning Level 2</SelectItem>
+                              <SelectItem value="warned_3">Warning Level 3</SelectItem>
+                              <SelectItem value="suspended">Suspended</SelectItem>
+                              <SelectItem value="blacklisted">Blacklisted</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            variant="destructive"
+                            className="mt-4 w-full"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={deleteMemberMutation.isPending}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            {deleteMemberMutation.isPending ? 'Deleting...' : 'Delete Member'}
+                          </Button>
+                        </>
                       ) : (
                         <div className="flex items-center gap-2">
                           <Badge className={getStatusColor(memberData?.status ?? 'inactive')}>
@@ -1316,222 +1336,212 @@ export default function MemberDetailsPage() {
                           <Separator />
                           <div>
                             <h4 className="text-sm font-medium mb-3">Quick Actions</h4>
+                            {canManageBasedOnRank ? (
+                              <div className="grid gap-2">
+                                {canPromote && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="justify-start"
+                                    disabled={promoteMutation.isPending}
+                                    onClick={() => {
+                                      if (!memberData.rankId) {
+                                        // Member has no rank, promote to lowest rank
+                                        const lowestRank = departmentInfo?.ranks
+                                          ?.sort((a, b) => a.level - b.level)[0]; // Get lowest level rank
 
-                            <div className="grid gap-2">
-                              {canPromote && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start"
-                                  disabled={promoteMutation.isPending}
-                                  onClick={() => {
-                                    if (!memberData.rankId) {
-                                      // Member has no rank, promote to lowest rank
-                                      const lowestRank = departmentInfo?.ranks
-                                        ?.sort((a, b) => a.level - b.level)[0]; // Get lowest level rank
+                                        if (lowestRank) {
+                                          handlePromote(lowestRank.id, 'Initial rank assignment');
+                                        } else {
+                                          showQuickError("No ranks available in this department");
+                                        }
+                                        return;
+                                      }
 
-                                      if (lowestRank) {
-                                        handlePromote(lowestRank.id, 'Initial rank assignment');
+                                      const currentRankLevel = memberData.rankLevel ?? 0;
+                                      // Sort ranks by level and find the next higher rank
+                                      const higherRanks = departmentInfo?.ranks
+                                        ?.filter(rank => rank.level > currentRankLevel)
+                                        ?.sort((a, b) => a.level - b.level); // Sort ascending to get lowest higher rank first
+
+                                      if (higherRanks && higherRanks.length > 0) {
+                                        const nextRank = higherRanks[0]; // Get the next rank (lowest higher rank)
+                                        if (nextRank) {
+                                          handlePromote(nextRank.id, 'Quick promotion');
+                                        }
                                       } else {
-                                        showQuickError("No ranks available in this department");
+                                        showQuickError("No higher rank available for promotion");
                                       }
-                                      return;
-                                    }
+                                    }}
+                                  >
+                                    <TrendingUp className="h-4 w-4 mr-2" />
+                                    {promoteMutation.isPending ? "Promoting..." : (memberData.rankId ? "Promote" : "Assign Rank")}
+                                  </Button>
+                                )}
 
-                                    const currentRankLevel = memberData.rankLevel ?? 0;
-                                    // Sort ranks by level and find the next higher rank
-                                    const higherRanks = departmentInfo?.ranks
-                                      ?.filter(rank => rank.level > currentRankLevel)
-                                      ?.sort((a, b) => a.level - b.level); // Sort ascending to get lowest higher rank first
-
-                                    if (higherRanks && higherRanks.length > 0) {
-                                      const nextRank = higherRanks[0]; // Get the next rank (lowest higher rank)
-                                      if (nextRank) {
-                                        handlePromote(nextRank.id, 'Quick promotion');
-                                      }
-                                    } else {
-                                      showQuickError("No higher rank available for promotion");
-                                    }
-                                  } }
-                                >
-                                  <TrendingUp className="h-4 w-4 mr-2" />
-                                  {promoteMutation.isPending ? "Promoting..." : (memberData.rankId ? "Promote" : "Assign Rank")}
-                                </Button>
-                              )}
-
-                              {canDemote && memberData.rankId && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start"
-                                  disabled={demoteMutation.isPending}
-                                  onClick={() => {
-                                    const currentRankLevel = memberData.rankLevel ?? 0;
-                                    // Sort ranks by level and find the next lower rank
-                                    const lowerRanks = departmentInfo?.ranks
-                                      ?.filter(rank => rank.level < currentRankLevel)
-                                      ?.sort((a, b) => b.level - a.level); // Sort descending to get highest lower rank first
-
-                                    if (lowerRanks && lowerRanks.length > 0) {
-                                      const prevRank = lowerRanks[0]; // Get the previous rank (highest lower rank)
-                                      if (prevRank) {
-                                        handleDemote(prevRank.id, 'Quick demotion');
-                                      }
-                                    } else {
-                                      showQuickError("No lower rank available for demotion");
-                                    }
-                                  } }
-                                >
-                                  <TrendingDown className="h-4 w-4 mr-2" />
-                                  {demoteMutation.isPending ? "Demoting..." : "Demote"}
-                                </Button>
-                              )}
-
-                              {canDemote && memberData.rankId && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start text-gray-600 hover:text-gray-700"
-                                  disabled={updateMemberMutation.isPending}
-                                  onClick={() => {
-                                    updateMemberMutation.mutate({
-                                      id: memberId,
-                                      rankId: null,
-                                    });
-                                  } }
-                                >
-                                  <UserX className="h-4 w-4 mr-2" />
-                                  Remove Rank
-                                </Button>
-                              )}
-
-                              {canDiscipline && (
-                                <>
+                                {canDemote && memberData.rankId && (
                                   <Button
                                     variant="outline"
                                     size="sm"
-                                    className="justify-start text-orange-600 hover:text-orange-700"
-                                    onClick={() => openDisciplineDialog('warn')}
-                                    disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
-                                  >
-                                    <AlertTriangle className="h-4 w-4 mr-2" />
-                                    {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
-                                  </Button>
+                                    className="justify-start"
+                                    disabled={demoteMutation.isPending}
+                                    onClick={() => {
+                                      const currentRankLevel = memberData.rankLevel ?? 0;
+                                      // Sort ranks by level and find the next lower rank
+                                      const lowerRanks = departmentInfo?.ranks
+                                        ?.filter(rank => rank.level < currentRankLevel)
+                                        ?.sort((a, b) => b.level - a.level); // Sort descending to get highest lower rank first
 
+                                      if (lowerRanks && lowerRanks.length > 0) {
+                                        const prevRank = lowerRanks[0]; // Get the previous rank (highest lower rank)
+                                        if (prevRank) {
+                                          handleDemote(prevRank.id, 'Quick demotion');
+                                        }
+                                      } else {
+                                        showQuickError("No lower rank available for demotion");
+                                      }
+                                    }}
+                                  >
+                                    <TrendingDown className="h-4 w-4 mr-2" />
+                                    {demoteMutation.isPending ? "Demoting..." : "Demote"}
+                                  </Button>
+                                )}
+
+                                {canDemote && memberData.rankId && (
                                   <Button
                                     variant="outline"
                                     size="sm"
-                                    className="justify-start text-red-600 hover:text-red-700"
-                                    onClick={() => openDisciplineDialog('suspend')}
-                                    disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                                    className="justify-start text-gray-600 hover:text-gray-700"
+                                    disabled={updateMemberMutation.isPending}
+                                    onClick={() => {
+                                      updateMemberMutation.mutate({
+                                        id: memberId,
+                                        rankId: null,
+                                      });
+                                    }}
                                   >
-                                    <Ban className="h-4 w-4 mr-2" />
-                                    {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Suspend"}
+                                    <UserX className="h-4 w-4 mr-2" />
+                                    Remove Rank
                                   </Button>
-                                </>
-                              )}
+                                )}
 
-                              {canDiscipline && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start text-purple-600 hover:text-purple-700"
-                                  onClick={openLoaDialog}
-                                  disabled={loaMutation.isPending || updateMemberMutation.isPending}
-                                >
-                                  <Timer className="h-4 w-4 mr-2" />
-                                  {loaMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Set LOA"}
-                                </Button>
-                              )}
+                                {canDiscipline && (
+                                  <>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="justify-start text-orange-600 hover:text-orange-700"
+                                      onClick={() => openDisciplineDialog('warn')}
+                                      disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                                    >
+                                      <AlertTriangle className="h-4 w-4 mr-2" />
+                                      {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
+                                    </Button>
 
-                              {memberData.status === 'leave_of_absence' && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start text-green-600 hover:text-green-700"
-                                  onClick={() => {
-                                    // Debug: Log disciplinary actions to see what we have
-                                    console.log('All disciplinary actions:', disciplinaryActions);
-                                    console.log('Member status:', memberData.status);
-                                    
-                                    // Find the active LOA disciplinary action
-                                    const activeLOA = disciplinaryActions?.find(
-                                      (action: DisciplinaryAction) => {
-                                        console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
-                                        return action.isActive && action.actionType === 'leave_of_absence';
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="justify-start text-red-600 hover:text-red-700"
+                                      onClick={() => openDisciplineDialog('suspend')}
+                                      disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                                    >
+                                      <Ban className="h-4 w-4 mr-2" />
+                                      {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Suspend"}
+                                    </Button>
+                                  </>
+                                )}
+
+                                {canDiscipline && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="justify-start text-purple-600 hover:text-purple-700"
+                                    onClick={openLoaDialog}
+                                    disabled={loaMutation.isPending || updateMemberMutation.isPending}
+                                  >
+                                    <Timer className="h-4 w-4 mr-2" />
+                                    {loaMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Set LOA"}
+                                  </Button>
+                                )}
+
+                                {memberData.status === 'leave_of_absence' && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="justify-start text-green-600 hover:text-green-700"
+                                    onClick={() => {
+                                      // Find the active LOA disciplinary action
+                                      const activeLOA = disciplinaryActions?.find(
+                                        (action: DisciplinaryAction) => action.isActive && action.actionType === 'leave_of_absence'
+                                      );
+                                      
+                                      if (activeLOA) {
+                                        // Use dismiss if we found the active LOA
+                                        disciplineDismissMutation.mutate({
+                                          actionId: activeLOA.id,
+                                          reason: 'LOA ended early by management'
+                                        });
+                                      } else {
+                                        // Use the new endLoaMutation for fallback
+                                        endLoaMutation.mutate({
+                                          memberId: memberData.id,
+                                          actionType: 'loa_returned',
+                                          reason: 'LOA ended early by management',
+                                          description: 'LOA ended early by management',
+                                        });
                                       }
-                                    );
-                                    
-                                    console.log('Found active LOA:', activeLOA);
-                                    
-                                    if (activeLOA) {
-                                      // Use dismiss if we found the active LOA
-                                      disciplineDismissMutation.mutate({
-                                        actionId: activeLOA.id,
-                                        reason: 'LOA ended early by management'
-                                      });
-                                    } else {
-                                      // Use the new endLoaMutation for fallback
-                                      console.log('Using fallback: ending LOA with return action + status update');
-                                      endLoaMutation.mutate({
-                                        memberId: memberData.id,
-                                        actionType: 'loa_returned',
-                                        reason: 'LOA ended early by management',
-                                        description: 'LOA ended early by management',
-                                      });
-                                    }
-                                  }}
-                                  disabled={disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
-                                >
-                                  <CheckCircle className="h-4 w-4 mr-2" />
-                                  {(disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "End LOA Early"}
-                                </Button>
-                              )}
+                                    }}
+                                    disabled={disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                                  >
+                                    <CheckCircle className="h-4 w-4 mr-2" />
+                                    {(disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "End LOA Early"}
+                                  </Button>
+                                )}
 
-                              {memberData.status === 'suspended' && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="justify-start text-green-600 hover:text-green-700"
-                                  onClick={() => {
-                                    // Debug: Log disciplinary actions to see what we have
-                                    console.log('All disciplinary actions:', disciplinaryActions);
-                                    console.log('Member status:', memberData.status);
-                                    
-                                    // Find the active suspension disciplinary action
-                                    const activeSuspension = disciplinaryActions?.find(
-                                      (action: DisciplinaryAction) => {
-                                        console.log('Checking action:', action.actionType, 'isActive:', action.isActive);
-                                        return action.isActive && action.actionType === 'suspension';
+                                {memberData.status === 'suspended' && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="justify-start text-green-600 hover:text-green-700"
+                                    onClick={() => {
+                                      // Find the active suspension disciplinary action
+                                      const activeSuspension = disciplinaryActions?.find(
+                                        (action: DisciplinaryAction) => action.isActive && action.actionType === 'suspension'
+                                      );
+                                      
+                                      if (activeSuspension) {
+                                        // Use dismiss if we found the active suspension
+                                        disciplineDismissMutation.mutate({
+                                          actionId: activeSuspension.id,
+                                          reason: 'Suspension ended early by management'
+                                        });
+                                      } else {
+                                        // Use the new unsuspendMutation for fallback
+                                        unsuspendMutation.mutate({
+                                          memberId: memberData.id,
+                                          actionType: 'unsuspended',
+                                          reason: 'Suspension ended early by management',
+                                          description: 'Suspension ended early by management',
+                                        });
                                       }
-                                    );
-                                    
-                                    console.log('Found active suspension:', activeSuspension);
-                                    
-                                    if (activeSuspension) {
-                                      // Use dismiss if we found the active suspension
-                                      disciplineDismissMutation.mutate({
-                                        actionId: activeSuspension.id,
-                                        reason: 'Suspension ended early by management'
-                                      });
-                                    } else {
-                                      // Use the new unsuspendMutation for fallback
-                                      console.log('Using fallback: unsuspending with unsuspended action + status update');
-                                      unsuspendMutation.mutate({
-                                        memberId: memberData.id,
-                                        actionType: 'unsuspended',
-                                        reason: 'Suspension ended early by management',
-                                        description: 'Suspension ended early by management',
-                                      });
-                                    }
-                                  }}
-                                  disabled={disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
-                                >
-                                  <CheckCircle className="h-4 w-4 mr-2" />
-                                  {(disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "Unsuspend Member"}
-                                </Button>
-                              )}
-                            </div>
+                                    }}
+                                    disabled={disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                                  >
+                                    <CheckCircle className="h-4 w-4 mr-2" />
+                                    {(disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "Unsuspend Member"}
+                                  </Button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="p-3 text-sm bg-muted text-muted-foreground rounded-md flex items-center gap-2">
+                                <Info className="h-4 w-4 flex-shrink-0" />
+                                <span>
+                                  {isActingOnSelf 
+                                    ? "Actions are not available for your own profile."
+                                    : "Actions are disabled for members of an equal or higher rank."}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
@@ -1652,6 +1662,34 @@ export default function MemberDetailsPage() {
                   </Button>
                 </DialogFooter>
               </DialogContent>
+            </Dialog>
+            {/* Delete Member Confirmation Dialog */}
+            <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Are you absolutely sure?</DialogTitle>
+                        <DialogDescription>
+                            This action cannot be undone. This will permanently delete {memberData?.roleplayName ?? 'this member'} from the department and remove all their associated data.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={handleDeleteMember}
+                            disabled={deleteMemberMutation.isPending}
+                        >
+                            {deleteMemberMutation.isPending ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Deleting...
+                                </>
+                            ) : 'Yes, delete member'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
             </Dialog>
           </>
         )}

@@ -2681,6 +2681,125 @@ export const deptRouter = createTRPCRouter({
             });
           }
         }),
+        //remove member from department and free up their rank make sure they don't appear in roster
+        memberDeletion: protectedProcedure
+        .input(z.object({ 
+          memberId: z.number().int().positive(),
+          departmentId: z.number().int().positive(),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          try {
+            const actorDiscordId = String(ctx.dbUser.discordId);
+      
+            // 1. Get actor's member info and check for manage_members permission
+            const actorMemberResults = await postgrestDb
+              .select({
+                rankLevel: deptSchema.departmentRanks.level,
+                permissions: deptSchema.departmentRanks.permissions,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(deptSchema.departmentRanks, eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id))
+              .where(and(
+                eq(deptSchema.departmentMembers.discordId, actorDiscordId),
+                eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                eq(deptSchema.departmentMembers.isActive, true)
+              ))
+              .limit(1);
+            
+            const actorMember = actorMemberResults[0];
+      
+            if (!actorMember?.permissions?.manage_members) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You don't have permission to delete members in this department.",
+              });
+            }
+      
+            // 2. Get target member info
+            const targetMemberResults = await postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                departmentId: deptSchema.departmentMembers.departmentId,
+                departmentIdNumber: deptSchema.departmentMembers.departmentIdNumber,
+                rankLevel: deptSchema.departmentRanks.level,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(deptSchema.departmentRanks, eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id))
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
+      
+            if (targetMemberResults.length === 0) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Member not found.",
+              });
+            }
+            const targetMember = targetMemberResults[0];
+      
+            if (targetMember?.departmentId !== input.departmentId) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "Member does not belong to the specified department.",
+              });
+            }
+      
+            // 3. Assert actor can act on target
+            assertCanActOnMember({
+              actorDiscordId: actorDiscordId,
+              actorRankLevel: actorMember.rankLevel ?? 0,
+              targetDiscordId: targetMember?.discordId,
+              targetRankLevel: targetMember?.rankLevel ?? 0,
+              actionName: "delete member"
+            });
+            // 4. Perform soft deletion
+            console.log(`🗑️ Soft-deleting member, removing Discord roles for ${targetMember?.discordId}`);
+            const roleRemovalResult = await removeDiscordRolesForInactiveMember(
+              targetMember.discordId,
+              targetMember.departmentId
+            );
+            if (roleRemovalResult.success) {
+              console.log(`✅ Successfully removed Discord roles: ${roleRemovalResult.message}`);
+            } else {
+              console.warn(`⚠️ Failed to remove Discord roles: ${roleRemovalResult.message}`);
+            }
+      
+            if (targetMember?.departmentIdNumber) {
+              await postgrestDb
+                .update(deptSchema.departmentIdNumbers)
+                .set({
+                  isAvailable: true,
+                  currentMemberId: null,
+                })
+                .where(
+                  and(
+                    eq(deptSchema.departmentIdNumbers.departmentId, targetMember?.departmentId),
+                    eq(deptSchema.departmentIdNumbers.idNumber, targetMember?.departmentIdNumber)
+                  )
+                );
+              console.log(`✅ Freed up ID number ${targetMember?.departmentIdNumber}`);
+            }
+      
+            const result = await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({ 
+                isActive: false,
+                lastActiveDate: new Date()
+              })
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .returning();
+      
+            return result[0];
+      
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            console.error("Failed to delete member:", error);
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to delete member.",
+            });
+          }
+        }),
     }),
 
     // ===== ANALYTICS AND REPORTS =====
@@ -3687,7 +3806,7 @@ export const deptRouter = createTRPCRouter({
                   eq(deptSchema.departmentIdNumbers.departmentId, targetMember.departmentId),
                   eq(deptSchema.departmentIdNumbers.idNumber, targetMember.departmentIdNumber)
                 ));
-              console.log(`[User Update] Released ID number ${targetMember.departmentIdNumber} for member ${targetMember.id}`);
+              console.log(`🔄 Released ID number ${targetMember.departmentIdNumber} for member ${targetMember.id}`);
             }
           }
 
@@ -4526,6 +4645,7 @@ export const deptRouter = createTRPCRouter({
             });
           }
         }),
+  
     }),
 
     // ===== TIME CLOCK MANAGEMENT =====
@@ -7217,7 +7337,7 @@ export const deptRouter = createTRPCRouter({
         } catch (error) {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to fetch memberships",
+            message: error instanceof Error ? error.message : "Failed to fetch memberships",
           });
         }
       }),

@@ -1,27 +1,29 @@
 import type { MetadataRoute } from 'next';
+import { postgrestDb } from "@/server/postgres";
+import { forms, formResponses } from "@/server/postgres/schema/form";
+import { isNull } from "drizzle-orm";
 
 // TODO: Replace 'https://yourdomain.com' with your actual production domain
 const BASE_URL = 'https://panel.justicerp.com';
 
-// Placeholder function for fetching dynamic form IDs
-// You'll need to implement this based on your data source (e.g., tRPC query)
-async function getAllFormIds(): Promise<{ id: string | number }[]> {
-  // Example:
-  // const forms = await api.form.getAllPublicForms.query(); // Adjust based on your API
-  // return forms.map(form => ({ id: form.id }));
-  console.warn("Sitemap: getAllFormIds is using placeholder data. Implement actual data fetching.");
-  return [{ id: 'example-form-1' }, { id: 'example-form-2' }]; // Placeholder
+// Fetch dynamic form IDs from the database
+async function getAllFormIds(): Promise<{ id: number }[]> {
+  const rows = await postgrestDb
+    .select({ id: forms.id })
+    .from(forms)
+    .where(isNull(forms.deletedAt))
+    .execute();
+  return rows;
 }
 
-// Placeholder function for fetching dynamic response IDs (adjust as needed for different contexts)
-// You might need separate functions or more complex logic if response IDs vary significantly per section
-async function getAllResponseIds(context?: string): Promise<{ id: string | number }[]> {
-  // Example:
-  // const responses = await api.responses.getAllPublicResponses.query({ type: context });
-  console.warn(`Sitemap: getAllResponseIds (context: ${context}) is using placeholder data. Implement actual data fetching.`);
-  return [{ id: 'example-response-1' }, { id: 'example-response-2' }]; // Placeholder
+// Fetch dynamic response IDs from the database
+async function getAllResponseIds(context?: string): Promise<{ id: number }[]> {
+  const rows = await postgrestDb
+    .select({ id: formResponses.id })
+    .from(formResponses)
+    .execute();
+  return rows;
 }
-
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const lastModified = new Date();

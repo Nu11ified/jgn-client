@@ -5083,10 +5083,11 @@ export const deptRouter = createTRPCRouter({
               targetMemberId = input.memberId;
             }
 
-            // Calculate week boundaries (Sunday to Sunday)
+            // Calculate week boundaries (Friday to Friday)
             const now = new Date();
+            const diffToFriday = (now.getDay() - 5 + 7) % 7;
             const startOfWeek = new Date(now);
-            startOfWeek.setDate(now.getDate() - now.getDay() + (7 * input.weekOffset));
+            startOfWeek.setDate(now.getDate() - diffToFriday + (7 * input.weekOffset));
             startOfWeek.setHours(0, 0, 0, 0);
             
             const endOfWeek = new Date(startOfWeek);
@@ -5292,10 +5293,11 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // Calculate week boundaries (Sunday to Sunday)
+            // Calculate week boundaries (Friday to Friday)
             const now = new Date();
+            const diffToFriday = (now.getDay() - 5 + 7) % 7;
             const startOfWeek = new Date(now);
-            startOfWeek.setDate(now.getDate() - now.getDay() + (7 * input.weekOffset));
+            startOfWeek.setDate(now.getDate() - diffToFriday + (7 * input.weekOffset));
             startOfWeek.setHours(0, 0, 0, 0);
             
             const endOfWeek = new Date(startOfWeek);

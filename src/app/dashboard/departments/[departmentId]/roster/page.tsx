@@ -35,7 +35,7 @@ export default function DepartmentRosterPage() {
   const departmentId = parseInt(params.departmentId as string);
 
   // Filters state
-  const [statusFilter, setStatusFilter] = useState<MemberStatus[]>([]);
+  const [statusFilter, setStatusFilter] = useState<MemberStatus[]>(['active']);
   const [rankFilter, setRankFilter] = useState<number[]>([]);
   const [teamFilter, setTeamFilter] = useState<number[]>([]);
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -208,7 +208,7 @@ export default function DepartmentRosterPage() {
                   <Users className="h-5 w-5 text-blue-500" />
                   <div>
                     <p className="text-sm font-medium">Total Members</p>
-                    <p className="text-2xl font-bold">{stats.totalMembers}</p>
+                    <p className="text-2xl font-bold">{stats.activeMembers + stats.inTrainingMembers + stats.pendingMembers}</p>
                   </div>
                 </div>
               </CardContent>
@@ -542,7 +542,7 @@ export default function DepartmentRosterPage() {
                       <Button 
                         variant="outline" 
                         onClick={() => setPage(page + 1)} 
-                        disabled={page >= (totalPages ?? 1)}
+                        disabled={page >= (totalPages - 1)}
                       >
                         Next ({Math.min((totalPages ?? 1), page + 1)})
                       </Button>

@@ -633,8 +633,6 @@ export default function FormsAdmin() {
                               )}
                             />
                             {formMethods.formState.errors.categoryId && <p className="text-sm text-destructive mt-1">{formMethods.formState.errors.categoryId.message}</p>}
-                              )}
-                            />
                         </div>
 
                         <Card>

@@ -608,14 +608,16 @@ export default function FormsAdmin() {
                             {formMethods.formState.errors.title && <p className="text-sm text-destructive mt-1">{formMethods.formState.errors.title.message}</p>}
                         </div>
                         <div>
-                            <Label htmlFor="description">Description (Optional)</Label>
-                            <Textarea id="description" {...formMethods.register("description")} maxLength={1000} />
+                            <Label htmlFor="description">Description</Label>
+                            <Textarea id="description" {...formMethods.register("description", { required: "Description is required" })} maxLength={1000} />
+                            {formMethods.formState.errors.description && <p className="text-sm text-destructive mt-1">{formMethods.formState.errors.description.message}</p>}
                         </div>
                         <div>
-                          <Label htmlFor="categoryId">Category (Optional)</Label>
+                          <Label htmlFor="categoryId">Category</Label>
                           <Controller
                               name="categoryId"
                               control={formMethods.control}
+                              rules={{ required: "Category is required" }}
                               render={({ field }) => (
                                 <Select onValueChange={(value) => field.onChange(value ? Number(value) : null)} value={field.value?.toString() ?? ""}>
                                     <SelectTrigger>
@@ -628,6 +630,9 @@ export default function FormsAdmin() {
                                         ))}
                                     </SelectContent>
                                 </Select>
+                              )}
+                            />
+                            {formMethods.formState.errors.categoryId && <p className="text-sm text-destructive mt-1">{formMethods.formState.errors.categoryId.message}</p>}
                               )}
                             />
                         </div>

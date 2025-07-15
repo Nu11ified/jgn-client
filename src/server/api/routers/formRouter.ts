@@ -4,15 +4,15 @@ import {
   protectedProcedure,
   adminProcedure,
 } from "@/server/api/trpc";
-import { db } from "@/server/db"; 
-import { postgrestDb } from "@/server/postgres"; 
+import { db } from "@/server/db";
+import { postgrestDb } from "@/server/postgres";
 import type {
   NewForm,
   //NewFormResponse,
   NewFormCategory,
   ReviewerDecisionObject,
   FormResponseStatus,
-  Form as PgForm, 
+  Form as PgForm,
   FormResponse as PgFormResponse,
 } from "@/server/postgres/schema/form";
 import {
@@ -24,10 +24,11 @@ import {
   reviewerDecisionEnum,
   formResponseStatusEnum,
 } from "@/server/postgres/schema/form";
-import { userServerRoles, roles, users } from "@/server/db/schema/user-schema"; 
+import { userServerRoles, roles, users } from "@/server/db/schema/user-schema";
 import { user as authUser, account as authAccount } from "@/server/db/schema/auth-schema"; // Added for auth tables
 import { TRPCError } from "@trpc/server";
-import { and, eq, sql as drizzleSql, count, desc, getTableColumns, isNull, inArray } from "drizzle-orm"; 
+import { and, eq, sql as drizzleSql, count, desc, getTableColumns, isNull, inArray } from "drizzle-orm";
+import { validateFormContent } from "@/server/api/services/form/profanityCheck";
 
 // Updated to fetch all roles for a user, irrespective of serverIds
 async function getAllUserRoleIds(userDiscordId: bigint): Promise<string[]> {
@@ -58,7 +59,7 @@ async function mapUserIdsToDetails(userIds: Set<string>): Promise<Map<string, { 
     // Separate auth user IDs from Discord IDs based on format
     const authUserIds = new Set<string>();
     const discordIds = new Set<string>();
-    
+
     userIds.forEach(id => {
       // Discord IDs are typically 17-19 digit numbers
       if (/^\d{17,19}$/.test(id)) {
@@ -170,7 +171,7 @@ async function mapUserIdsToDetails(userIds: Set<string>): Promise<Map<string, { 
           authUserIds.forEach(authUserId => {
             const discordIdStr = authUserToDiscordIdMap.get(authUserId);
             const username = discordIdStr ? discordIdToUsernameMap.get(discordIdStr) : null;
-            
+
             finalUserDetailsMap.set(authUserId, {
               fullName: username ?? null,
               discordId: discordIdStr ?? null,
@@ -312,7 +313,7 @@ export const formRouter = createTRPCRouter({
         .where(eq(forms.id, id))
         .returning()
         .execute();
-      
+
       const updatedForm = result[0];
       if (!updatedForm) {
         throw new TRPCError({
@@ -345,10 +346,10 @@ export const formRouter = createTRPCRouter({
     }),
 
   // -------------------- QUESTION REORDERING --------------------
-  
+
   // Move a question up one position
   moveQuestionUp: adminProcedure
-    .input(z.object({ 
+    .input(z.object({
       formId: z.number().int(),
       questionIndex: z.number().int().min(0)
     }))
@@ -631,7 +632,7 @@ export const formRouter = createTRPCRouter({
       // Validate that all question IDs exist and count matches
       const existingQuestionIds = questions.map(q => q.id);
       const uniqueNewOrderIds = [...new Set(newOrder)];
-      
+
       if (uniqueNewOrderIds.length !== questions.length) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -693,11 +694,33 @@ export const formRouter = createTRPCRouter({
       if (!hasRequiredRole(userRoles, targetForm.accessRoleIds)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "You do not have the required role to submit this form." });
       }
-      
+
+      // Validate form content for profanity, spam, and other issues
+      const contentValidation = validateFormContent({
+        answers: input.answers.map(answer => ({
+          questionId: answer.questionId,
+          value: answer.answer
+        })),
+        userId: ctx.session.user.id,
+        formId: input.formId
+      });
+
+      if (!contentValidation.isValid) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Form submission blocked: ${contentValidation.errors.join('; ')}`
+        });
+      }
+
+      // Log warnings for monitoring purposes
+      if (contentValidation.warnings.length > 0) {
+        console.warn(`[Form Submission Warning] User ${ctx.session.user.id} form ${input.formId}: ${contentValidation.warnings.join('; ')}`);
+      }
+
       let initialStatus: FormResponseStatus = formResponseStatusEnum.enum.pending_review;
       if (targetForm.requiredReviewers === 0) {
-        initialStatus = targetForm.requiresFinalApproval 
-          ? formResponseStatusEnum.enum.pending_approval 
+        initialStatus = targetForm.requiresFinalApproval
+          ? formResponseStatusEnum.enum.pending_approval
           : formResponseStatusEnum.enum.approved;
       }
 
@@ -769,7 +792,7 @@ export const formRouter = createTRPCRouter({
       if (!responseToReview.form) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not load associated form details. This should not happen." });
       }
-      
+
       const currentResponseStatus: FormResponseStatus = responseToReview.status;
       if (currentResponseStatus !== formResponseStatusEnum.enum.pending_review) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This response is not currently pending review." });
@@ -787,7 +810,7 @@ export const formRouter = createTRPCRouter({
           message: "You do not have the required role to review this form.",
         });
       }
-      
+
       const existingReview = responseToReview.reviewerDecisions?.find(
         (d: ReviewerDecisionObject) => d.userId === ctx.session.user.id
       );
@@ -802,9 +825,9 @@ export const formRouter = createTRPCRouter({
         reviewedAt: new Date(),
         comments: input.comments,
       };
-      
+
       const updatedDecisions = [...(responseToReview.reviewerDecisions ?? []), newDecision];
-      
+
       // Add the current reviewer's ID to the reviewerIds array if not already present
       const currentReviewerId = ctx.session.user.id;
       const updatedReviewerIds = Array.from(new Set([...(responseToReview.reviewerIds ?? []), currentReviewerId]));
@@ -884,7 +907,7 @@ export const formRouter = createTRPCRouter({
       if (!responseToApprove.form) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not load associated form details. This should not happen." });
       }
-      
+
       const currentApprovalStatus: FormResponseStatus = responseToApprove.status;
       if (currentApprovalStatus !== formResponseStatusEnum.enum.pending_approval) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This response is not currently pending final approval." });
@@ -915,7 +938,7 @@ export const formRouter = createTRPCRouter({
       }
       return updatedResponse;
     }),
-  
+
   // -------------------- LISTING PROCEDURES & UI HELPERS --------------------
   listCategories: adminProcedure.query(async () => {
     const categoriesWithCounts = await postgrestDb
@@ -928,7 +951,7 @@ export const formRouter = createTRPCRouter({
       .groupBy(formCategories.id)
       .orderBy(desc(formCategories.createdAt))
       .execute();
-    return categoriesWithCounts.map(c => ({...c, formsCount: c.formsCount ?? 0})); 
+    return categoriesWithCounts.map(c => ({ ...c, formsCount: c.formsCount ?? 0 }));
   }),
 
   listForms: protectedProcedure
@@ -966,7 +989,7 @@ export const formRouter = createTRPCRouter({
         .limit(input.limit)
         .offset(input.cursor ?? 0)
         .execute();
-      
+
       // For more robust pagination, consider cursor-based pagination on a unique, sequential column like createdAt + id.
       // For now, this is offset-based.
       let nextCursor: number | undefined = undefined;
@@ -993,14 +1016,14 @@ export const formRouter = createTRPCRouter({
       if (!form) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Form not found or has been deleted." });
       }
-      
+
       if (!ctx.dbUser?.discordId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "User Discord ID not found in context." });
       }
       const userDiscordId = ctx.dbUser.discordId;
       const userRoles = await getAllUserRoleIds(userDiscordId);
       if (!hasRequiredRole(userRoles, form.accessRoleIds)) {
-         // If form.accessRoleIds is null or empty, hasRequiredRole returns true, allowing access.
+        // If form.accessRoleIds is null or empty, hasRequiredRole returns true, allowing access.
         throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to view this form." });
       }
 
@@ -1029,14 +1052,14 @@ export const formRouter = createTRPCRouter({
       const responseItems = await postgrestDb.query.formResponses.findMany({
         where: and(...whereClauses),
         orderBy: (responses, { desc }) => [desc(responses.submittedAt)],
-        limit: input.limit + 1, 
+        limit: input.limit + 1,
       });
 
       let nextCursor: string | undefined = undefined;
       if (responseItems.length > input.limit) {
-        const nextItem = responseItems.pop(); 
+        const nextItem = responseItems.pop();
         if (nextItem) {
-            nextCursor = nextItem.submittedAt.toISOString();
+          nextCursor = nextItem.submittedAt.toISOString();
         }
       }
 
@@ -1109,12 +1132,12 @@ export const formRouter = createTRPCRouter({
         }
         const isReviewer = hasRequiredRole(userRoleIds, formForResponse.reviewerRoleIds);
         const isFinalApprover = hasRequiredRole(userRoleIds, formForResponse.finalApproverRoleIds);
-        
+
         // Allow reviewers to view responses in pending_review status
         if (response.status === formResponseStatusEnum.enum.pending_review && isReviewer) {
           canView = true;
         }
-        
+
         // Allow final approvers to view any response for forms where they have the final approver role
         if (isFinalApprover) {
           canView = true;
@@ -1155,7 +1178,7 @@ export const formRouter = createTRPCRouter({
         // form: response.form, // Already included in the spread PgFormResponse & { form: PgForm }
       };
     }),
-  
+
   listUserSubmissions: protectedProcedure
     .input(z.object({
       limit: z.number().min(1).max(50).default(10),
@@ -1164,7 +1187,7 @@ export const formRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       // Use auth user ID, not Discord ID - form responses store auth user IDs
       const userId = ctx.session.user.id;
-      
+
       const whereClauses = [eq(formResponses.userId, userId)];
 
       if (input.cursor) {
@@ -1184,7 +1207,7 @@ export const formRouter = createTRPCRouter({
       if (submissions.length > input.limit) {
         const nextItem = submissions.pop();
         if (nextItem) {
-            nextCursor = nextItem.submittedAt.toISOString();
+          nextCursor = nextItem.submittedAt.toISOString();
         }
       }
 
@@ -1224,7 +1247,7 @@ export const formRouter = createTRPCRouter({
           form: item.form as { id: number; title: string | null } | undefined,
         };
       });
-      
+
       return {
         items: augmentedSubmissions,
         nextCursor,
@@ -1247,7 +1270,7 @@ export const formRouter = createTRPCRouter({
 
       const conditions = [
         eq(formResponses.status, formResponseStatusEnum.enum.pending_review),
-        userRoleIds.length > 0 
+        userRoleIds.length > 0
           ? drizzleSql`${forms.reviewerRoleIds} && ARRAY[${drizzleSql.join(userRoleIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::varchar[]`
           : drizzleSql`FALSE`, // If user has no roles, they can't match any reviewerRoleIds that require roles
         drizzleSql`NOT (EXISTS (
@@ -1280,12 +1303,12 @@ export const formRouter = createTRPCRouter({
         formDescription: forms.description,
         reviewerDecisions: formResponses.reviewerDecisions,
       })
-      .from(formResponses)
-      .innerJoin(forms, eq(formResponses.formId, forms.id))
-      .where(and(...conditions))
-      .orderBy(desc(formResponses.submittedAt), desc(formResponses.id))
-      .limit(input.limit + 1)
-      .execute();
+        .from(formResponses)
+        .innerJoin(forms, eq(formResponses.formId, forms.id))
+        .where(and(...conditions))
+        .orderBy(desc(formResponses.submittedAt), desc(formResponses.id))
+        .limit(input.limit + 1)
+        .execute();
 
       let nextCursor: string | undefined = undefined;
       if (items.length > input.limit) {
@@ -1326,7 +1349,7 @@ export const formRouter = createTRPCRouter({
           reviewerDecisions: augmentedReviewerDecisions ?? [],
         };
       });
-      
+
       return {
         items: augmentedItems,
         nextCursor,
@@ -1360,7 +1383,7 @@ export const formRouter = createTRPCRouter({
           columns: { submittedAt: true, id: true }
         });
         if (cursorItem?.submittedAt) {
-           conditions.push(
+          conditions.push(
             drizzleSql`(${formResponses.submittedAt} < ${cursorItem.submittedAt.toISOString()}) OR 
                        (${formResponses.submittedAt} = ${cursorItem.submittedAt.toISOString()} AND ${formResponses.id} < ${cursorItem.id})`
           );
@@ -1376,12 +1399,12 @@ export const formRouter = createTRPCRouter({
         formTitle: forms.title,
         formDescription: forms.description,
       })
-      .from(formResponses)
-      .innerJoin(forms, eq(formResponses.formId, forms.id))
-      .where(and(...conditions))
-      .orderBy(desc(formResponses.submittedAt), desc(formResponses.id))
-      .limit(input.limit + 1)
-      .execute();
+        .from(formResponses)
+        .innerJoin(forms, eq(formResponses.formId, forms.id))
+        .where(and(...conditions))
+        .orderBy(desc(formResponses.submittedAt), desc(formResponses.id))
+        .limit(input.limit + 1)
+        .execute();
 
       let nextCursor: string | undefined = undefined;
       if (items.length > input.limit) {
@@ -1432,7 +1455,7 @@ export const formRouter = createTRPCRouter({
       if (!targetForm) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Form not found or has been deleted." });
       }
-      
+
       if (!ctx.dbUser?.discordId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "User Discord ID not found in context." });
       }
@@ -1455,15 +1478,15 @@ export const formRouter = createTRPCRouter({
       // If responseId is not provided, check if a draft already exists for this user and form
       if (!existingDraftId) {
         const [existingDraft] = await postgrestDb.select({ id: formResponses.id })
-            .from(formResponses)
-            .where(and(
-                eq(formResponses.formId, input.formId),
-                eq(formResponses.userId, userId),
-                eq(formResponses.status, formResponseStatusEnum.enum.draft)
-            ))
-            .limit(1).execute();
+          .from(formResponses)
+          .where(and(
+            eq(formResponses.formId, input.formId),
+            eq(formResponses.userId, userId),
+            eq(formResponses.status, formResponseStatusEnum.enum.draft)
+          ))
+          .limit(1).execute();
         if (existingDraft) {
-            existingDraftId = existingDraft.id;
+          existingDraftId = existingDraft.id;
         }
       }
 
@@ -1475,7 +1498,7 @@ export const formRouter = createTRPCRouter({
           .where(and(eq(formResponses.id, existingDraftId), eq(formResponses.userId, userId)))
           .returning().execute();
         if (!updatedDraft) {
-            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to update draft. It might have been submitted or deleted." });
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to update draft. It might have been submitted or deleted." });
         }
         return updatedDraft;
       } else {
@@ -1485,7 +1508,7 @@ export const formRouter = createTRPCRouter({
           .values({ ...draftData, submittedAt: new Date() })
           .returning().execute();
         if (!newDraft) {
-            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to save draft." });
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to save draft." });
         }
         return newDraft;
       }
@@ -1502,7 +1525,7 @@ export const formRouter = createTRPCRouter({
           eq(formResponses.userId, userId),
           eq(formResponses.status, formResponseStatusEnum.enum.draft)
         ),
-        with: { form: { columns: { id: true, title: true } } } 
+        with: { form: { columns: { id: true, title: true } } }
       });
       // The cast for `s.form` in listUserSubmissions might be a good pattern here too if needed.
       // For now, relying on Drizzle's inferred type for the `with` clause.
@@ -1514,10 +1537,10 @@ export const formRouter = createTRPCRouter({
       throw new TRPCError({ code: "UNAUTHORIZED", message: "User not authenticated" });
     }
     if (!ctx.dbUser?.discordId) {
-        throw new TRPCError({ code: "UNAUTHORIZED", message: "User Discord ID not found in context for fetching roles." });
+      throw new TRPCError({ code: "UNAUTHORIZED", message: "User Discord ID not found in context for fetching roles." });
     }
     const userDiscordId = ctx.dbUser.discordId;
-    
+
     const userRolesResult = await db
       .select({
         roleId: userServerRoles.roleId,
@@ -1525,13 +1548,13 @@ export const formRouter = createTRPCRouter({
         roleName: roles.roleName, // Get roleName from the imported roles table
       })
       .from(userServerRoles)
-      .leftJoin(roles, eq(userServerRoles.roleId, roles.roleId)) 
+      .leftJoin(roles, eq(userServerRoles.roleId, roles.roleId))
       .where(eq(userServerRoles.userDiscordId, userDiscordId));
-      
-    return userRolesResult.map(r => ({ 
-        ...r, 
-        roleId: String(r.roleId),
-        roleName: r.roleName ?? "Unknown Role"
+
+    return userRolesResult.map(r => ({
+      ...r,
+      roleId: String(r.roleId),
+      roleName: r.roleName ?? "Unknown Role"
     }));
   }),
 
@@ -1551,7 +1574,7 @@ export const formRouter = createTRPCRouter({
       .orderBy(desc(formCategories.createdAt))
       .execute();
     // Filter out categories with no active forms or make formsCount explicitly number
-    return categoriesWithCounts.map(c => ({...c, formsCount: c.formsCount ?? 0}));
+    return categoriesWithCounts.map(c => ({ ...c, formsCount: c.formsCount ?? 0 }));
   }),
 
   listAllOutcomesForFinalApprover: protectedProcedure
@@ -1643,7 +1666,7 @@ export const formRouter = createTRPCRouter({
           username: users.username,
         })
         .from(authAccount)
-        .innerJoin(users, eq(users.discordId, drizzleSql`CAST(${authAccount.accountId} AS UNSIGNED)`) )
+        .innerJoin(users, eq(users.discordId, drizzleSql`CAST(${authAccount.accountId} AS UNSIGNED)`))
         .where(inArray(authAccount.userId, Array.from(userIds)))
         .execute();
 
@@ -1659,7 +1682,7 @@ export const formRouter = createTRPCRouter({
       const augmentedResponses = responses.map(response => {
         const submitter = userDetailsMap.get(response.userId);
         const finalApprover = response.finalApproverId ? userDetailsMap.get(response.finalApproverId) : undefined;
-        
+
         const augmentedReviewerDecisions = response.reviewerDecisions?.map(decision => ({
           ...decision,
           reviewerFullName: userDetailsMap.get(decision.userId)?.fullName ?? decision.reviewerName,

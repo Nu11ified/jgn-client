@@ -24,6 +24,9 @@ import {
   type RoleChangeAction,
 } from "@/server/api/services/department";
 
+// Import callsign service
+import { regenerateAndUpdateMemberCallsign } from "@/server/api/services/department/callsignService";
+
 //const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
 //const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
 
@@ -122,17 +125,17 @@ const validateApiKey = (apiKey: string): boolean => {
       message: "Training API key not configured",
     });
   }
-  
+
   // Add timing-safe comparison to prevent timing attacks
   if (apiKey.length !== validApiKey.length) {
     return false;
   }
-  
+
   let mismatch = 0;
   for (let i = 0; i < apiKey.length; i++) {
     mismatch |= apiKey.charCodeAt(i) ^ validApiKey.charCodeAt(i);
   }
-  
+
   return mismatch === 0;
 };
 
@@ -144,16 +147,16 @@ const SYNC_RATE_WINDOW = 60000; // 1 minute in milliseconds
 const checkSyncRateLimit = (discordId: string): boolean => {
   const now = Date.now();
   const userLimit = syncRateLimiter.get(discordId);
-  
+
   if (!userLimit || now > userLimit.resetTime) {
     syncRateLimiter.set(discordId, { count: 1, resetTime: now + SYNC_RATE_WINDOW });
     return true;
   }
-  
+
   if (userLimit.count >= SYNC_RATE_LIMIT) {
     return false;
   }
-  
+
   userLimit.count++;
   return true;
 };
@@ -168,7 +171,7 @@ const performSecureSync = async (params: {
   requireTransaction?: boolean;
 }): Promise<{ success: boolean; message: string; syncResult?: Awaited<ReturnType<typeof syncMemberRolesAndCallsign>> }> => {
   const { discordId, departmentId, memberId, roleChanges = [], skipRoleManagement = false, requireTransaction = false } = params;
-  
+
   try {
     // Check rate limit
     if (!checkSyncRateLimit(discordId)) {
@@ -177,7 +180,7 @@ const performSecureSync = async (params: {
         message: "Rate limit exceeded. Please wait before syncing again.",
       };
     }
-    
+
     // Validate member exists and is active
     const member = await postgrestDb
       .select({
@@ -194,21 +197,21 @@ const performSecureSync = async (params: {
         )
       )
       .limit(1);
-    
+
     if (member.length === 0) {
       return {
         success: false,
         message: "Member not found or mismatched data",
       };
     }
-    
+
     if (!member[0]!.isActive) {
       return {
         success: false,
         message: "Cannot sync inactive member",
       };
     }
-    
+
     // Perform the sync
     const syncResult = await syncMemberRolesAndCallsign({
       discordId,
@@ -217,7 +220,7 @@ const performSecureSync = async (params: {
       roleChanges,
       skipRoleManagement,
     });
-    
+
     return {
       success: syncResult.success,
       message: syncResult.message,
@@ -355,7 +358,7 @@ const validateRankLimit = async (
 
     // Count current members with this rank in the appropriate scope
     let currentCount: number;
-    
+
     if (teamId && teamLimit !== null) {
       // Count members in the specific team with this rank
       const teamMemberCount = await postgrestDb
@@ -388,8 +391,8 @@ const validateRankLimit = async (
 
     return {
       canPromote,
-      reason: canPromote 
-        ? "Promotion allowed" 
+      reason: canPromote
+        ? "Promotion allowed"
         : `Rank limit reached (${currentCount}/${effectiveLimit})`,
       departmentLimit: rankData.maxMembers,
       teamLimit,
@@ -452,7 +455,7 @@ const getRankLimitInfo = async (
 
       // Count current members with this rank
       let currentCount: number;
-      
+
       if (teamId && teamLimit !== null) {
         // Count members in the specific team with this rank
         const teamMemberCount = await postgrestDb
@@ -600,7 +603,7 @@ export const deptRouter = createTRPCRouter({
                 .from(deptSchema.departments)
                 .orderBy(asc(deptSchema.departments.name));
             }
-            
+
             return departments;
           } catch (error) {
             throw new TRPCError({
@@ -698,7 +701,7 @@ export const deptRouter = createTRPCRouter({
         .input(updateDepartmentSchema)
         .mutation(async ({ input }) => {
           const { id, ...updateData } = input;
-          
+
           try {
             // Check if department exists
             const existingDept = await postgrestDb
@@ -762,6 +765,37 @@ export const deptRouter = createTRPCRouter({
               .where(eq(deptSchema.departments.id, id))
               .returning();
 
+            // If callsign prefix was updated, regenerate callsigns for all active members
+            if (updateData.callsignPrefix) {
+              console.log(`🔄 Updating callsigns for all members in department ${id} due to prefix change`);
+
+              // Get all active members in this department
+              const activeMembers = await postgrestDb
+                .select({
+                  id: deptSchema.departmentMembers.id,
+                })
+                .from(deptSchema.departmentMembers)
+                .where(
+                  and(
+                    eq(deptSchema.departmentMembers.departmentId, id),
+                    eq(deptSchema.departmentMembers.isActive, true)
+                  )
+                );
+
+              // Regenerate callsigns for all active members
+              const callsignUpdatePromises = activeMembers.map(member =>
+                regenerateAndUpdateMemberCallsign(member.id)
+              );
+
+              try {
+                await Promise.all(callsignUpdatePromises);
+                console.log(`✅ Successfully updated callsigns for ${activeMembers.length} members`);
+              } catch (error) {
+                console.error(`❌ Error updating member callsigns:`, error);
+                // Don't throw here - department update succeeded, callsign updates are secondary
+              }
+            }
+
             return result[0];
           } catch (error) {
             if (error instanceof TRPCError) throw error;
@@ -774,7 +808,7 @@ export const deptRouter = createTRPCRouter({
 
       // DELETE department (cascade delete with proper cleanup)
       delete: adminProcedure
-        .input(z.object({ 
+        .input(z.object({
           id: z.number().int().positive(),
           force: z.boolean().default(false) // Force deletion even with active members
         }))
@@ -828,7 +862,7 @@ export const deptRouter = createTRPCRouter({
             // Step 1: Soft delete all active members and clean up their Discord roles
             if (memberCount > 0) {
               console.log(`👥 Soft-deleting ${memberCount} active members...`);
-              
+
               const activeMembers = await postgrestDb
                 .select({
                   id: deptSchema.departmentMembers.id,
@@ -848,10 +882,10 @@ export const deptRouter = createTRPCRouter({
                 try {
                   // Remove Discord roles
                   const roleRemovalResult = await removeDiscordRolesForInactiveMember(
-                    member.discordId, 
+                    member.discordId,
                     input.id
                   );
-                  
+
                   if (roleRemovalResult.success) {
                     console.log(`✅ Removed Discord roles for member ${member.discordId}`);
                   } else {
@@ -862,7 +896,7 @@ export const deptRouter = createTRPCRouter({
                   if (member.departmentIdNumber) {
                     await postgrestDb
                       .update(deptSchema.departmentIdNumbers)
-                      .set({ 
+                      .set({
                         isAvailable: true,
                         currentMemberId: null,
                       })
@@ -877,7 +911,7 @@ export const deptRouter = createTRPCRouter({
                   // Soft delete member
                   await postgrestDb
                     .update(deptSchema.departmentMembers)
-                    .set({ 
+                    .set({
                       isActive: false,
                       lastActiveDate: new Date()
                     })
@@ -887,7 +921,7 @@ export const deptRouter = createTRPCRouter({
                   console.error(`❌ Error processing member ${member.discordId}:`, memberError);
                 }
               }
-              
+
               // Wait 2 seconds after processing all members
               console.log(`⏳ Waiting 2 seconds before proceeding to team cleanup...`);
               await delay(2000);
@@ -903,7 +937,7 @@ export const deptRouter = createTRPCRouter({
                   WHERE department_id = ${input.id}
                 )`
               );
-            
+
             // Wait 2 seconds after team memberships cleanup
             console.log(`⏳ Waiting 2 seconds before proceeding to rank limits cleanup...`);
             await delay(2000);
@@ -918,7 +952,7 @@ export const deptRouter = createTRPCRouter({
                   WHERE department_id = ${input.id}
                 )`
               );
-            
+
             // Wait 2 seconds after rank limits cleanup
             console.log(`⏳ Waiting 2 seconds before proceeding to teams deletion...`);
             await delay(2000);
@@ -931,7 +965,7 @@ export const deptRouter = createTRPCRouter({
               .returning({ id: deptSchema.departmentTeams.id, name: deptSchema.departmentTeams.name });
 
             console.log(`✅ Deleted ${teamsDeleted.length} teams`);
-            
+
             // Wait 2 seconds after teams deletion
             console.log(`⏳ Waiting 2 seconds before proceeding to ranks deletion...`);
             await delay(2000);
@@ -944,7 +978,7 @@ export const deptRouter = createTRPCRouter({
               .returning({ id: deptSchema.departmentRanks.id, name: deptSchema.departmentRanks.name });
 
             console.log(`✅ Deleted ${ranksDeleted.length} ranks`);
-            
+
             // Wait 2 seconds after ranks deletion
             console.log(`⏳ Waiting 2 seconds before proceeding to meetings cleanup...`);
             await delay(2000);
@@ -959,14 +993,14 @@ export const deptRouter = createTRPCRouter({
                   WHERE department_id = ${input.id}
                 )`
               );
-            
+
             const meetingsDeleted = await postgrestDb
               .delete(deptSchema.departmentMeetings)
               .where(eq(deptSchema.departmentMeetings.departmentId, input.id))
               .returning({ id: deptSchema.departmentMeetings.id, title: deptSchema.departmentMeetings.title });
 
             console.log(`✅ Deleted ${meetingsDeleted.length} meetings`);
-            
+
             // Wait 2 seconds after meetings cleanup
             console.log(`⏳ Waiting 2 seconds before proceeding to ID numbers cleanup...`);
             await delay(2000);
@@ -976,7 +1010,7 @@ export const deptRouter = createTRPCRouter({
             await postgrestDb
               .delete(deptSchema.departmentIdNumbers)
               .where(eq(deptSchema.departmentIdNumbers.departmentId, input.id));
-            
+
             // Wait 2 seconds before final department deletion
             console.log(`⏳ Waiting 2 seconds before final department deletion...`);
             await delay(2000);
@@ -1102,14 +1136,14 @@ export const deptRouter = createTRPCRouter({
 
       // READ ranks by department
       listByDepartment: adminProcedure
-        .input(z.object({ 
+        .input(z.object({
           departmentId: z.number().int().positive(),
           includeInactive: z.boolean().default(false)
         }))
         .query(async ({ input }) => {
           try {
             const conditions = [eq(deptSchema.departmentRanks.departmentId, input.departmentId)];
-            
+
             if (!input.includeInactive) {
               conditions.push(eq(deptSchema.departmentRanks.isActive, true));
             }
@@ -1119,7 +1153,7 @@ export const deptRouter = createTRPCRouter({
               .from(deptSchema.departmentRanks)
               .where(and(...conditions))
               .orderBy(desc(deptSchema.departmentRanks.level));
-              
+
             return ranks;
           } catch (error) {
             throw new TRPCError({
@@ -1134,7 +1168,7 @@ export const deptRouter = createTRPCRouter({
         .input(updateRankSchema)
         .mutation(async ({ input }) => {
           const { id, ...updateData } = input;
-          
+
           try {
             // Check if rank exists
             const existingRank = await postgrestDb
@@ -1279,12 +1313,12 @@ export const deptRouter = createTRPCRouter({
             return { success: true, message: "Rank deleted successfully" };
           } catch (error) {
             if (error instanceof TRPCError) throw error;
-            
+
             // Log the actual error for debugging
             console.error("Rank deletion error:", error);
-            
+
             const errorMessage = String(error);
-            
+
             // Provide more specific error messages for common issues
             if (errorMessage.includes('foreign key constraint') || errorMessage.includes('FOREIGN KEY constraint')) {
               throw new TRPCError({
@@ -1292,7 +1326,7 @@ export const deptRouter = createTRPCRouter({
                 message: "Cannot delete rank due to database constraints. Please contact an administrator.",
               });
             }
-            
+
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
               message: `Failed to delete rank: ${errorMessage}`,
@@ -1372,14 +1406,14 @@ export const deptRouter = createTRPCRouter({
 
       // READ teams by department
       listByDepartment: adminProcedure
-        .input(z.object({ 
+        .input(z.object({
           departmentId: z.number().int().positive(),
           includeInactive: z.boolean().default(false)
         }))
         .query(async ({ input }) => {
           try {
             const conditions = [eq(deptSchema.departmentTeams.departmentId, input.departmentId)];
-            
+
             if (!input.includeInactive) {
               conditions.push(eq(deptSchema.departmentTeams.isActive, true));
             }
@@ -1389,7 +1423,7 @@ export const deptRouter = createTRPCRouter({
               .from(deptSchema.departmentTeams)
               .where(and(...conditions))
               .orderBy(asc(deptSchema.departmentTeams.name));
-              
+
             return teams;
           } catch (error) {
             throw new TRPCError({
@@ -1404,7 +1438,7 @@ export const deptRouter = createTRPCRouter({
         .input(updateTeamSchema)
         .mutation(async ({ input }) => {
           const { id, ...updateData } = input;
-          
+
           try {
             // Check if team exists and get current data
             const existingTeam = await postgrestDb
@@ -1661,7 +1695,7 @@ export const deptRouter = createTRPCRouter({
 
             // Use the centralized secure sync function to handle team assignment
             const roleChanges = await createTeamRoleChanges(null, input.teamId, memberData.departmentId);
-            
+
             const syncResult = await performSecureSync({
               discordId: memberData.discordId,
               departmentId: memberData.departmentId,
@@ -1755,7 +1789,7 @@ export const deptRouter = createTRPCRouter({
 
             // Use the centralized secure sync function to handle Discord role changes and database sync
             const roleChanges = await createTeamRoleChanges(input.teamId, null, membershipData.departmentId);
-            
+
             const syncResult = await performSecureSync({
               discordId: membershipData.discordId,
               departmentId: membershipData.departmentId,
@@ -1934,12 +1968,12 @@ export const deptRouter = createTRPCRouter({
 
             if (existingMember.length > 0) {
               const member = existingMember[0]!;
-              
+
               // If member is inactive, reactivate them instead of throwing error
               if (!member.isActive) {
                 // Handle ID number restoration or assignment for reactivated member
                 let departmentIdNumber = member.departmentIdNumber;
-                
+
                 // If the member doesn't have an ID number or their old one is taken, assign a new one
                 if (!departmentIdNumber) {
                   departmentIdNumber = await postgrestDb.transaction(async (tx) => {
@@ -1988,7 +2022,7 @@ export const deptRouter = createTRPCRouter({
                     // Mark as unavailable and assign to this member
                     await tx
                       .update(deptSchema.departmentIdNumbers)
-                      .set({ 
+                      .set({
                         isAvailable: false,
                         currentMemberId: member.id,
                         lastAssignedTo: input.discordId,
@@ -2020,7 +2054,7 @@ export const deptRouter = createTRPCRouter({
                     // Restore their old ID number
                     await postgrestDb
                       .update(deptSchema.departmentIdNumbers)
-                      .set({ 
+                      .set({
                         isAvailable: false,
                         currentMemberId: member.id,
                         lastAssignedTo: input.discordId,
@@ -2039,7 +2073,7 @@ export const deptRouter = createTRPCRouter({
 
                 const updatedMember = await postgrestDb
                   .update(deptSchema.departmentMembers)
-                  .set({ 
+                  .set({
                     isActive: true,
                     status: input.status ?? member.status,
                     rankId: input.rankId ?? member.rankId,
@@ -2120,7 +2154,7 @@ export const deptRouter = createTRPCRouter({
               // Mark the ID as unavailable and set placeholder for currentMemberId
               await tx
                 .update(deptSchema.departmentIdNumbers)
-                .set({ 
+                .set({
                   isAvailable: false,
                   lastAssignedTo: input.discordId,
                   lastAssignedAt: new Date(),
@@ -2200,15 +2234,15 @@ export const deptRouter = createTRPCRouter({
             // Make Discord sync asynchronous to improve response time
             if (input.rankId || input.primaryTeamId) {
               console.log("🔄 Scheduling Discord role sync for new member");
-              
+
               // Create role changes for initial assignment
               const roleChanges: RoleChangeAction[] = [];
-              
+
               if (input.rankId) {
                 const rankRoleChanges = await createRankRoleChanges(null, input.rankId, input.departmentId);
                 roleChanges.push(...rankRoleChanges);
               }
-              
+
               if (input.primaryTeamId) {
                 const teamRoleChanges = await createTeamRoleChanges(null, input.primaryTeamId, input.departmentId);
                 roleChanges.push(...teamRoleChanges);
@@ -2254,22 +2288,22 @@ export const deptRouter = createTRPCRouter({
               ...createdMember,
               syncResult: {
                 success: true,
-                message: DISCORD_SYNC_FEATURE_FLAGS.ENABLE_ASYNC_MEMBER_CREATION_SYNC 
+                message: DISCORD_SYNC_FEATURE_FLAGS.ENABLE_ASYNC_MEMBER_CREATION_SYNC
                   ? "Member created successfully, Discord sync running in background"
                   : "Member created and Discord sync completed"
               },
             };
           } catch (error) {
             console.error("❌ Member creation error:", error);
-            
+
             // Provide more specific error messages based on the error type
             if (error instanceof TRPCError) {
               throw error;
             }
-            
+
             // Check for common database constraint errors
             const errorMessage = error instanceof Error ? error.message : String(error);
-            
+
             if (errorMessage.includes('unique constraint') || errorMessage.includes('UNIQUE constraint')) {
               if (errorMessage.includes('dept_members_department_id_number_unique')) {
                 throw new TRPCError({
@@ -2288,14 +2322,14 @@ export const deptRouter = createTRPCRouter({
                 });
               }
             }
-            
+
             if (errorMessage.includes('foreign key constraint') || errorMessage.includes('FOREIGN KEY constraint')) {
               throw new TRPCError({
                 code: "BAD_REQUEST",
                 message: "Invalid department, rank, or team ID provided",
               });
             }
-            
+
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
               message: `Failed to create member: ${errorMessage}`,
@@ -2305,7 +2339,7 @@ export const deptRouter = createTRPCRouter({
 
       // READ members by department
       listByDepartment: adminProcedure
-        .input(z.object({ 
+        .input(z.object({
           departmentId: z.number().int().positive(),
           includeInactive: z.boolean().default(false),
           status: deptSchema.departmentMemberStatusEnum.optional()
@@ -2313,7 +2347,7 @@ export const deptRouter = createTRPCRouter({
         .query(async ({ input }) => {
           try {
             const conditions = [eq(deptSchema.departmentMembers.departmentId, input.departmentId)];
-            
+
             if (!input.includeInactive) {
               conditions.push(eq(deptSchema.departmentMembers.isActive, true));
             }
@@ -2356,7 +2390,7 @@ export const deptRouter = createTRPCRouter({
         .input(updateMemberSchema)
         .mutation(async ({ input }) => {
           const { id, ...updateData } = input;
-          
+
           try {
             // Check if member exists
             const existingMember = await postgrestDb
@@ -2376,9 +2410,9 @@ export const deptRouter = createTRPCRouter({
 
             // Get department info for Discord operations
             const department = await postgrestDb
-              .select({ 
+              .select({
                 callsignPrefix: deptSchema.departments.callsignPrefix,
-                discordGuildId: deptSchema.departments.discordGuildId 
+                discordGuildId: deptSchema.departments.discordGuildId
               })
               .from(deptSchema.departments)
               .where(eq(deptSchema.departments.id, currentMember.departmentId))
@@ -2394,7 +2428,7 @@ export const deptRouter = createTRPCRouter({
 
             // Handle rank and team changes through the centralized sync service
             const roleChanges: RoleChangeAction[] = [];
-            
+
             if (updateData.rankId !== undefined && updateData.rankId !== currentMember.rankId) {
               const rankRoleChanges = await createRankRoleChanges(currentMember.rankId, updateData.rankId, currentMember.departmentId);
               roleChanges.push(...rankRoleChanges);
@@ -2431,7 +2465,7 @@ export const deptRouter = createTRPCRouter({
 
             // Prepare update data for non-role/team fields only
             const memberUpdateData: Partial<Pick<typeof deptSchema.departmentMembers.$inferInsert, 'roleplayName' | 'badgeNumber' | 'status' | 'notes' | 'isActive'>> = {};
-            
+
             // Handle non-role/team fields that can be updated directly
             if (updateData.roleplayName !== undefined) {
               memberUpdateData.roleplayName = updateData.roleplayName;
@@ -2453,10 +2487,10 @@ export const deptRouter = createTRPCRouter({
             if (updateData.status && ['inactive', 'suspended', 'blacklisted', 'leave_of_absence'].includes(updateData.status)) {
               console.log(`🗑️ Member status changing to ${updateData.status}, removing Discord roles`);
               const roleRemovalResult = await removeDiscordRolesForInactiveMember(
-                currentMember.discordId, 
+                currentMember.discordId,
                 currentMember.departmentId
               );
-              
+
               if (roleRemovalResult.success) {
                 console.log(`✅ Successfully removed Discord roles: ${roleRemovalResult.message}`);
               } else {
@@ -2468,10 +2502,10 @@ export const deptRouter = createTRPCRouter({
             if (updateData.status === 'active') {
               console.log("➕ Member status changing to active, restoring Discord roles");
               const roleRestoreResult = await restoreDiscordRolesForActiveMember(
-                currentMember.discordId, 
+                currentMember.discordId,
                 currentMember.departmentId
               );
-              
+
               if (roleRestoreResult.success) {
                 console.log(`✅ Successfully restored Discord roles: ${roleRestoreResult.message}`);
               } else {
@@ -2483,10 +2517,10 @@ export const deptRouter = createTRPCRouter({
             if (updateData.isActive === true && currentMember.isActive === false) {
               console.log("➕ Member set to active (isActive: true), restoring Discord roles");
               const roleRestoreResult = await restoreDiscordRolesForActiveMember(
-                currentMember.discordId, 
+                currentMember.discordId,
                 currentMember.departmentId
               );
-              
+
               if (roleRestoreResult.success) {
                 console.log(`✅ Successfully restored Discord roles: ${roleRestoreResult.message}`);
               } else {
@@ -2498,10 +2532,10 @@ export const deptRouter = createTRPCRouter({
             if (updateData.isActive === false) {
               console.log("🗑️ Member set to inactive (isActive: false), removing Discord roles");
               const roleRemovalResult = await removeDiscordRolesForInactiveMember(
-                currentMember.discordId, 
+                currentMember.discordId,
                 currentMember.departmentId
               );
-              
+
               if (roleRemovalResult.success) {
                 console.log(`✅ Successfully removed Discord roles: ${roleRemovalResult.message}`);
               } else {
@@ -2512,7 +2546,7 @@ export const deptRouter = createTRPCRouter({
               if (currentMember.departmentIdNumber) {
                 await postgrestDb
                   .update(deptSchema.departmentIdNumbers)
-                  .set({ 
+                  .set({
                     isAvailable: true,
                     currentMemberId: null,
                   })
@@ -2579,10 +2613,10 @@ export const deptRouter = createTRPCRouter({
             // Remove Discord roles when soft-deleting member
             console.log("🗑️ Soft-deleting member, removing Discord roles");
             const roleRemovalResult = await removeDiscordRolesForInactiveMember(
-              member.discordId, 
+              member.discordId,
               member.departmentId
             );
-            
+
             if (roleRemovalResult.success) {
               console.log(`✅ Successfully removed Discord roles: ${roleRemovalResult.message}`);
             } else {
@@ -2593,7 +2627,7 @@ export const deptRouter = createTRPCRouter({
             if (member.departmentIdNumber) {
               await postgrestDb
                 .update(deptSchema.departmentIdNumbers)
-                .set({ 
+                .set({
                   isAvailable: true,
                   currentMemberId: null,
                 })
@@ -2608,7 +2642,7 @@ export const deptRouter = createTRPCRouter({
             // Soft delete the member
             const result = await postgrestDb
               .update(deptSchema.departmentMembers)
-              .set({ 
+              .set({
                 isActive: false,
                 lastActiveDate: new Date()
               })
@@ -2650,7 +2684,7 @@ export const deptRouter = createTRPCRouter({
             if (member.departmentIdNumber) {
               await postgrestDb
                 .update(deptSchema.departmentIdNumbers)
-                .set({ 
+                .set({
                   isAvailable: true,
                   currentMemberId: null,
                 })
@@ -2681,16 +2715,16 @@ export const deptRouter = createTRPCRouter({
             });
           }
         }),
-        //remove member from department and free up their rank make sure they don't appear in roster
-        memberDeletion: protectedProcedure
-        .input(z.object({ 
+      //remove member from department and free up their rank make sure they don't appear in roster
+      memberDeletion: protectedProcedure
+        .input(z.object({
           memberId: z.number().int().positive(),
           departmentId: z.number().int().positive(),
         }))
         .mutation(async ({ ctx, input }) => {
           try {
             const actorDiscordId = String(ctx.dbUser.discordId);
-      
+
             // 1. Get actor's member info and check for manage_members permission
             const actorMemberResults = await postgrestDb
               .select({
@@ -2705,16 +2739,16 @@ export const deptRouter = createTRPCRouter({
                 eq(deptSchema.departmentMembers.isActive, true)
               ))
               .limit(1);
-            
+
             const actorMember = actorMemberResults[0];
-      
+
             if (!actorMember?.permissions?.manage_members) {
               throw new TRPCError({
                 code: "FORBIDDEN",
                 message: "You don't have permission to delete members in this department.",
               });
             }
-      
+
             // 2. Get target member info
             const targetMemberResults = await postgrestDb
               .select({
@@ -2728,7 +2762,7 @@ export const deptRouter = createTRPCRouter({
               .leftJoin(deptSchema.departmentRanks, eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id))
               .where(eq(deptSchema.departmentMembers.id, input.memberId))
               .limit(1);
-      
+
             if (targetMemberResults.length === 0) {
               throw new TRPCError({
                 code: "NOT_FOUND",
@@ -2736,14 +2770,14 @@ export const deptRouter = createTRPCRouter({
               });
             }
             const targetMember = targetMemberResults[0];
-      
+
             if (targetMember?.departmentId !== input.departmentId) {
               throw new TRPCError({
                 code: "BAD_REQUEST",
                 message: "Member does not belong to the specified department.",
               });
             }
-      
+
             // 3. Assert actor can act on target
             assertCanActOnMember({
               actorDiscordId: actorDiscordId,
@@ -2763,7 +2797,7 @@ export const deptRouter = createTRPCRouter({
             } else {
               console.warn(`⚠️ Failed to remove Discord roles: ${roleRemovalResult.message}`);
             }
-      
+
             if (targetMember?.departmentIdNumber) {
               await postgrestDb
                 .update(deptSchema.departmentIdNumbers)
@@ -2779,18 +2813,18 @@ export const deptRouter = createTRPCRouter({
                 );
               console.log(`✅ Freed up ID number ${targetMember?.departmentIdNumber}`);
             }
-      
+
             const result = await postgrestDb
               .update(deptSchema.departmentMembers)
-              .set({ 
+              .set({
                 isActive: false,
                 lastActiveDate: new Date()
               })
               .where(eq(deptSchema.departmentMembers.id, input.memberId))
               .returning();
-      
+
             return result[0];
-      
+
           } catch (error) {
             if (error instanceof TRPCError) throw error;
             console.error("Failed to delete member:", error);
@@ -2822,7 +2856,7 @@ export const deptRouter = createTRPCRouter({
                 .select({ count: sql`count(*)` })
                 .from(deptSchema.departmentMembers)
                 .where(eq(deptSchema.departmentMembers.departmentId, input.departmentId)),
-              
+
               // Active members
               postgrestDb
                 .select({ count: sql`count(*)` })
@@ -2909,7 +2943,7 @@ export const deptRouter = createTRPCRouter({
     memberManagement: createTRPCRouter({
       // Get members pending team assignment
       getPendingMembers: adminProcedure
-        .input(z.object({ 
+        .input(z.object({
           departmentId: z.number().int().positive(),
           includeInTraining: z.boolean().default(false),
         }))
@@ -3041,7 +3075,7 @@ export const deptRouter = createTRPCRouter({
             }
             // Use the centralized secure sync function to handle team assignment
             const roleChanges = await createTeamRoleChanges(null, input.teamId, member.departmentId);
-            
+
             const syncResult = await performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
@@ -3137,10 +3171,10 @@ export const deptRouter = createTRPCRouter({
             if (['inactive', 'suspended', 'blacklisted'].includes(input.status)) {
               console.log(`🗑️ Member status changing to ${input.status}, removing Discord roles`);
               const roleRemovalResult = await removeDiscordRolesForInactiveMember(
-                member.discordId, 
+                member.discordId,
                 member.departmentId
               );
-              
+
               if (roleRemovalResult.success) {
                 console.log(`✅ Successfully removed Discord roles: ${roleRemovalResult.message}`);
               } else {
@@ -3150,7 +3184,7 @@ export const deptRouter = createTRPCRouter({
 
             const result = await postgrestDb
               .update(deptSchema.departmentMembers)
-              .set({ 
+              .set({
                 status: input.status,
                 lastActiveDate: new Date(),
               })
@@ -3238,7 +3272,7 @@ export const deptRouter = createTRPCRouter({
 
             const result = await postgrestDb
               .update(deptSchema.departmentMembers)
-              .set({ 
+              .set({
                 status: "pending",
                 lastActiveDate: new Date(),
               })
@@ -3291,8 +3325,8 @@ export const deptRouter = createTRPCRouter({
             return {
               success: true,
               rank: result[0],
-              message: input.maxMembers === null 
-                ? "Rank limit removed (unlimited)" 
+              message: input.maxMembers === null
+                ? "Rank limit removed (unlimited)"
                 : `Rank limit set to ${input.maxMembers} members`,
             };
           } catch (error) {
@@ -3542,8 +3576,8 @@ export const deptRouter = createTRPCRouter({
           const permissions = member[0]!.permissions!;
           const hasPermission = permissions[input.permission] === true;
 
-          return { 
-            hasPermission, 
+          return {
+            hasPermission,
             level: member[0]!.level,
             reason: hasPermission ? 'Permission granted' : 'Insufficient permissions'
           };
@@ -3637,43 +3671,43 @@ export const deptRouter = createTRPCRouter({
             );
 
             if (disallowedChanges.length > 0) {
-               // If they try to change rankId, status, primaryTeamId, isActive for themselves without manage_members, block.
-               // If they have manage_members, they might be able to change their own status (e.g. notes), but not rank.
-               // The frontend already restricts this, but backend must enforce.
+              // If they try to change rankId, status, primaryTeamId, isActive for themselves without manage_members, block.
+              // If they have manage_members, they might be able to change their own status (e.g. notes), but not rank.
+              // The frontend already restricts this, but backend must enforce.
               if (
                 updateData.rankId !== undefined && updateData.rankId !== targetMember.rankId ||
                 updateData.status !== undefined && updateData.status !== targetMember.status ||
                 updateData.primaryTeamId !== undefined && updateData.primaryTeamId !== targetMember.primaryTeamId ||
                 updateData.isActive !== undefined && updateData.isActive !== targetMember.isActive
               ) {
-                 // If user does not have manage_members, they cannot change these sensitive fields for themselves.
-                 if (!actorPermissions?.manage_members) {
-                    throw new TRPCError({
-                        code: "FORBIDDEN",
-                        message: `You cannot modify your own rank, status, team, or activity status. Allowed fields for self-edit: ${allowedSelfEditFields.join(', ')}. Attempted to change: ${disallowedChanges.join(', ')}`,
-                    });
-                 }
-                 // If they DO have manage_members, they still shouldn't change their own rank via this route.
-                 // Status or team might be okay if they have manage_members, but rank is too sensitive.
-                 if (updateData.rankId !== undefined && updateData.rankId !== targetMember.rankId) {
-                    throw new TRPCError({
-                        code: "FORBIDDEN",
-                        message: "You cannot change your own rank, even with manage_members permission. Please contact an admin.",
-                    });
-                 }
+                // If user does not have manage_members, they cannot change these sensitive fields for themselves.
+                if (!actorPermissions?.manage_members) {
+                  throw new TRPCError({
+                    code: "FORBIDDEN",
+                    message: `You cannot modify your own rank, status, team, or activity status. Allowed fields for self-edit: ${allowedSelfEditFields.join(', ')}. Attempted to change: ${disallowedChanges.join(', ')}`,
+                  });
+                }
+                // If they DO have manage_members, they still shouldn't change their own rank via this route.
+                // Status or team might be okay if they have manage_members, but rank is too sensitive.
+                if (updateData.rankId !== undefined && updateData.rankId !== targetMember.rankId) {
+                  throw new TRPCError({
+                    code: "FORBIDDEN",
+                    message: "You cannot change your own rank, even with manage_members permission. Please contact an admin.",
+                  });
+                }
               }
             }
             // Filter updateData to only include allowed fields for self-edit
             finalUpdateData = Object.fromEntries(
-                Object.entries(updateData).filter(([key]) => allowedSelfEditFields.includes(key as keyof typeof updateData))
+              Object.entries(updateData).filter(([key]) => allowedSelfEditFields.includes(key as keyof typeof updateData))
             ) as Partial<typeof updateData>;
-            
+
             // If no allowed fields are being changed, there's nothing to do.
             if (Object.keys(finalUpdateData).length === 0 && Object.keys(updateData).length > 0) {
-                 throw new TRPCError({ code: "BAD_REQUEST", message: "No permissible fields to update for self-edit."});
+              throw new TRPCError({ code: "BAD_REQUEST", message: "No permissible fields to update for self-edit." });
             } else if (Object.keys(finalUpdateData).length === 0) {
-                // Nothing was actually sent to update that is allowed
-                return targetMember; // Or some other appropriate "no-op" response
+              // Nothing was actually sent to update that is allowed
+              return targetMember; // Or some other appropriate "no-op" response
             }
 
           } else {
@@ -3694,7 +3728,7 @@ export const deptRouter = createTRPCRouter({
             });
             // No field restrictions when manager edits others (beyond assertCanActOnMember)
           }
-          
+
           // If, after all checks, there's no data to update, throw error or return early.
           if (Object.keys(finalUpdateData).length === 0) {
             // This can happen if self-edit attempts to change only disallowed fields.
@@ -3726,7 +3760,7 @@ export const deptRouter = createTRPCRouter({
             // Rank limit validation (adapted from promote/demote routes)
             const rankValidation = await validateRankLimit(finalUpdateData.rankId!, targetMember.departmentId, targetMember.primaryTeamId ?? undefined);
             if (!rankValidation.canPromote && finalUpdateData.rankId !== null) { // null for rank removal bypasses limit
-                 throw new TRPCError({ code: "BAD_REQUEST", message: rankValidation.reason ?? "Cannot change to this rank due to rank limits." });
+              throw new TRPCError({ code: "BAD_REQUEST", message: rankValidation.reason ?? "Cannot change to this rank due to rank limits." });
             }
             const rankRoleChanges = await createRankRoleChanges(targetMember.rankId, finalUpdateData.rankId, targetMember.departmentId);
             roleChanges.push(...rankRoleChanges);
@@ -3738,32 +3772,32 @@ export const deptRouter = createTRPCRouter({
             roleChanges.push(...teamRoleChanges);
             callsignNeedsSync = true;
           }
-          
+
           // Perform Discord Sync if roles changed OR if only callsign needs update (e.g. roleplay name change)
           if (roleChanges.length > 0 || (finalUpdateData.roleplayName && finalUpdateData.roleplayName !== targetMember.roleplayName)) {
             // If roleplayName changed, callsign needs sync even if rank/team didn't change roles.
             // The syncMemberRolesAndCallsign will handle callsign update.
-            callsignNeedsSync = true; 
+            callsignNeedsSync = true;
           }
 
           if (callsignNeedsSync) {
-             const syncResult = await performSecureSync({
-                discordId: targetMember.discordId,
-                departmentId: targetMember.departmentId,
-                memberId: targetMember.id,
-                roleChanges, // Can be empty if only callsign from name change
-                skipRoleManagement: false, // Default to allowing role management
+            const syncResult = await performSecureSync({
+              discordId: targetMember.discordId,
+              departmentId: targetMember.departmentId,
+              memberId: targetMember.id,
+              roleChanges, // Can be empty if only callsign from name change
+              skipRoleManagement: false, // Default to allowing role management
+            });
+            if (!syncResult.success) {
+              console.warn(`⚠️ Role/Callsign sync had issues for member ${targetMember.id}: ${syncResult.message}`);
+              // For user-initiated updates, throw error if sync fails
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: `Failed to sync member roles: ${syncResult.message}`,
               });
-              if (!syncResult.success) {
-                console.warn(`⚠️ Role/Callsign sync had issues for member ${targetMember.id}: ${syncResult.message}`);
-                // For user-initiated updates, throw error if sync fails
-                throw new TRPCError({
-                  code: "INTERNAL_SERVER_ERROR",
-                  message: `Failed to sync member roles: ${syncResult.message}`,
-                });
-              }
+            }
           }
-          
+
 
           // 6. Prepare data for direct member table update (non-role/team affecting fields)
           const memberUpdatePayload: Partial<typeof deptSchema.departmentMembers.$inferInsert> = {};
@@ -3772,7 +3806,7 @@ export const deptRouter = createTRPCRouter({
           if (finalUpdateData.status !== undefined) memberUpdatePayload.status = finalUpdateData.status;
           if (finalUpdateData.notes !== undefined) memberUpdatePayload.notes = finalUpdateData.notes;
           if (finalUpdateData.isActive !== undefined) memberUpdatePayload.isActive = finalUpdateData.isActive;
-          
+
           // Add rankId and primaryTeamId if they are being updated and are part of finalUpdateData
           // (they would be excluded if it's a self-edit trying to change these without permission)
           if (finalUpdateData.rankId !== undefined) memberUpdatePayload.rankId = finalUpdateData.rankId;
@@ -3823,19 +3857,19 @@ export const deptRouter = createTRPCRouter({
             }
             updatedMemberResult = updateResult[0];
           } else {
-             // If only role/callsign sync happened, or no permissible fields changed.
-             // Fetch the potentially updated member data (e.g. new callsign from sync)
+            // If only role/callsign sync happened, or no permissible fields changed.
+            // Fetch the potentially updated member data (e.g. new callsign from sync)
             const currentData = await postgrestDb
-                .select() // Select all fields to match typical return
-                .from(deptSchema.departmentMembers)
-                .where(eq(deptSchema.departmentMembers.id, targetMember.id))
-                .limit(1);
+              .select() // Select all fields to match typical return
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.id, targetMember.id))
+              .limit(1);
             if (currentData.length === 0) {
-                 throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to retrieve member after potential sync." });
+              throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to retrieve member after potential sync." });
             }
             updatedMemberResult = currentData[0];
           }
-          
+
           // If callsign was potentially updated by sync, we need to ensure the returned object reflects this.
           // The `updatedMemberResult` from the DB might not have the latest callsign if it was purely a sync op.
           // However, `syncMemberRolesAndCallsign` internally updates the DB callsign.
@@ -3968,7 +4002,7 @@ export const deptRouter = createTRPCRouter({
 
             // Use the new centralized sync function to handle Discord role changes and database sync
             const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
-            
+
             const syncResult = await performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
@@ -4122,7 +4156,7 @@ export const deptRouter = createTRPCRouter({
 
             // Use the new centralized sync function to handle Discord role changes and database sync
             const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
-            
+
             const syncResult = await performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
@@ -4185,7 +4219,7 @@ export const deptRouter = createTRPCRouter({
 
             // Check if requester is viewing their own history or has permission
             const canView = member.discordId === String(ctx.dbUser.discordId);
-            
+
             if (!canView) {
               // Check if requester has view_all_members permission
               const requester = await postgrestDb
@@ -4283,10 +4317,10 @@ export const deptRouter = createTRPCRouter({
             // Get target member's rank level
             const targetRank = member.rankId
               ? await postgrestDb
-                  .select({ level: deptSchema.departmentRanks.level })
-                  .from(deptSchema.departmentRanks)
-                  .where(eq(deptSchema.departmentRanks.id, member.rankId))
-                  .limit(1)
+                .select({ level: deptSchema.departmentRanks.level })
+                .from(deptSchema.departmentRanks)
+                .where(eq(deptSchema.departmentRanks.id, member.rankId))
+                .limit(1)
               : [];
             const targetRankLevel = targetRank.length > 0 ? targetRank[0]!.level : 0;
 
@@ -4410,9 +4444,9 @@ export const deptRouter = createTRPCRouter({
                 departmentId: deptSchema.departmentMembers.departmentId,
                 discordId: deptSchema.departmentMembers.discordId,
               })
-                .from(deptSchema.departmentMembers)
-                .where(eq(deptSchema.departmentMembers.id, input.memberId))
-                .limit(1);
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
 
             if (targetMember.length === 0) {
               throw new TRPCError({
@@ -4423,7 +4457,7 @@ export const deptRouter = createTRPCRouter({
 
             const member = targetMember[0]!;
             const canView = member.discordId === String(ctx.dbUser.discordId);
-            
+
             if (!canView) {
               const requester = await postgrestDb
                 .select({
@@ -4461,7 +4495,7 @@ export const deptRouter = createTRPCRouter({
 
             // Build conditions
             const conditions = [eq(deptSchema.departmentDisciplinaryActions.memberId, input.memberId)];
-            
+
             if (!input.includeExpired) {
               conditions.push(eq(deptSchema.departmentDisciplinaryActions.isActive, true));
             }
@@ -4529,10 +4563,10 @@ export const deptRouter = createTRPCRouter({
             // Get target member's rank level
             const targetRank = disciplinaryAction.memberRankId
               ? await postgrestDb
-                  .select({ level: deptSchema.departmentRanks.level })
-                  .from(deptSchema.departmentRanks)
-                  .where(eq(deptSchema.departmentRanks.id, disciplinaryAction.memberRankId))
-                  .limit(1)
+                .select({ level: deptSchema.departmentRanks.level })
+                .from(deptSchema.departmentRanks)
+                .where(eq(deptSchema.departmentRanks.id, disciplinaryAction.memberRankId))
+                .limit(1)
               : [];
             const targetRankLevel = targetRank.length > 0 ? targetRank[0]!.level : 0;
 
@@ -4617,11 +4651,11 @@ export const deptRouter = createTRPCRouter({
 
                 if (memberInfo.length > 0) {
                   const currentStatus = memberInfo[0]!.status;
-                  
+
                   // Only update status if it's currently a disciplinary status
                   if (currentStatus === 'warned_1' || currentStatus === 'warned_2' || currentStatus === 'warned_3' || currentStatus === 'suspended') {
-              await postgrestDb
-                .update(deptSchema.departmentMembers)
+                    await postgrestDb
+                      .update(deptSchema.departmentMembers)
                       .set({
                         status: 'active',
                         updatedAt: new Date(),
@@ -4632,8 +4666,8 @@ export const deptRouter = createTRPCRouter({
               }
             }
 
-              return {
-                success: true,
+            return {
+              success: true,
               message: `Disciplinary action dismissed successfully`,
               action: result[0],
             };
@@ -4645,7 +4679,7 @@ export const deptRouter = createTRPCRouter({
             });
           }
         }),
-  
+
     }),
 
     // ===== TIME CLOCK MANAGEMENT =====
@@ -4915,7 +4949,7 @@ export const deptRouter = createTRPCRouter({
                   message: "You do not have permission to view other members' time records",
                 });
               }
-              
+
               // Verify the target member exists and is in the same department
               const targetMember = await postgrestDb
                 .select({ id: deptSchema.departmentMembers.id })
@@ -4942,13 +4976,13 @@ export const deptRouter = createTRPCRouter({
 
             // Build conditions
             const conditions = [eq(deptSchema.departmentTimeClockEntries.memberId, targetMemberId)];
-            
+
             if (input.startDate) {
               conditions.push(gte(deptSchema.departmentTimeClockEntries.clockInTime, input.startDate));
             }
-            
+
             if (input.endDate) {
-              conditions.push(lte(deptSchema.departmentTimeClockEntries.clockInTime, input.endDate)); 
+              conditions.push(lte(deptSchema.departmentTimeClockEntries.clockInTime, input.endDate));
             }
 
             console.log('[getHistory] Built conditions, starting entries query...');
@@ -5060,7 +5094,7 @@ export const deptRouter = createTRPCRouter({
                   message: "You do not have permission to view other members' time records",
                 });
               }
-              
+
               // Verify the target member exists and is in the same department
               const targetMember = await postgrestDb
                 .select({ id: deptSchema.departmentMembers.id })
@@ -5089,7 +5123,7 @@ export const deptRouter = createTRPCRouter({
             const startOfWeek = new Date(now);
             startOfWeek.setDate(now.getDate() - diffToFriday + (7 * input.weekOffset));
             startOfWeek.setHours(0, 0, 0, 0);
-            
+
             const endOfWeek = new Date(startOfWeek);
             endOfWeek.setDate(startOfWeek.getDate() + 7);
             endOfWeek.setHours(0, 0, 0, 0);
@@ -5299,7 +5333,7 @@ export const deptRouter = createTRPCRouter({
             const startOfWeek = new Date(now);
             startOfWeek.setDate(now.getDate() - diffToFriday + (7 * input.weekOffset));
             startOfWeek.setHours(0, 0, 0, 0);
-            
+
             const endOfWeek = new Date(startOfWeek);
             endOfWeek.setDate(startOfWeek.getDate() + 7);
             endOfWeek.setHours(0, 0, 0, 0);
@@ -5340,7 +5374,7 @@ export const deptRouter = createTRPCRouter({
             Object.keys(memberHours).forEach(memberIdStr => {
               const memberId = parseInt(memberIdStr);
               if (memberHours[memberId]) {
-                memberHours[memberId].totalHours = Math.round(memberHours[memberId].totalHours * 100) / 100;
+                memberHours[memberId]!
               }
             });
 
@@ -5622,7 +5656,7 @@ export const deptRouter = createTRPCRouter({
             const targetTeamId = input.teamId ?? member[0]!.primaryTeamId ?? undefined;
 
             const rankLimitInfo = await getRankLimitInfo(input.departmentId, targetTeamId);
-            
+
             return {
               departmentId: input.departmentId,
               teamId: targetTeamId,
@@ -5782,19 +5816,19 @@ export const deptRouter = createTRPCRouter({
             if (!input.cursor && !input.memberIdFilter) {
               // Build conditions without cursor for count query
               const countConditions = [eq(deptSchema.departmentMembers.departmentId, input.departmentId)];
-              
+
               if (!input.includeInactive) {
                 countConditions.push(eq(deptSchema.departmentMembers.isActive, true));
               }
-              
+
               if (input.statusFilter && input.statusFilter.length > 0) {
                 countConditions.push(inArray(deptSchema.departmentMembers.status, input.statusFilter));
               }
-              
+
               if (input.rankFilter && input.rankFilter.length > 0) {
                 countConditions.push(inArray(deptSchema.departmentMembers.rankId, input.rankFilter));
               }
-              
+
               if (!permissions.view_all_members) {
                 if (input.teamFilter && input.teamFilter.length > 0) {
                   countConditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
@@ -5830,8 +5864,8 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Calculate next cursor for infinite pagination
-            const nextCursor = hasMore && members.length > 0 
-              ? members[members.length - 1]?.id 
+            const nextCursor = hasMore && members.length > 0
+              ? members[members.length - 1]?.id
               : undefined;
 
             return {
@@ -5914,7 +5948,7 @@ export const deptRouter = createTRPCRouter({
             const permissions = requester[0]!.permissions!;
 
             // Check permissions - can view if they can view all members, or if this is their team and they can view team members
-            const canView = permissions.view_all_members || 
+            const canView = permissions.view_all_members ||
               (permissions.view_team_members && requester[0]!.primaryTeamId === input.teamId);
 
             if (!canView) {
@@ -5926,7 +5960,7 @@ export const deptRouter = createTRPCRouter({
 
             // Get team members via team memberships
             const conditions = [eq(deptSchema.departmentTeamMemberships.teamId, input.teamId)];
-            
+
             if (!input.includeInactive) {
               conditions.push(eq(deptSchema.departmentMembers.isActive, true));
             }
@@ -6760,7 +6794,7 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Delete attendance records first
-              await postgrestDb
+            await postgrestDb
               .delete(deptSchema.departmentMeetingAttendance)
               .where(eq(deptSchema.departmentMeetingAttendance.meetingId, input.meetingId));
 
@@ -7020,7 +7054,7 @@ export const deptRouter = createTRPCRouter({
 
           // Build conditions
           const conditions = [eq(deptSchema.departments.isActive, true)];
-          
+
           if (input?.type) {
             conditions.push(eq(deptSchema.departments.type, input.type));
           }
@@ -7291,14 +7325,14 @@ export const deptRouter = createTRPCRouter({
             member: result[0],
             message: `Successfully joined ${department[0]!.name}. You are now pending training.`,
           };
-          } catch (error) {
-            if (error instanceof TRPCError) throw error;
-            throw new TRPCError({
-              code: "INTERNAL_SERVER_ERROR",
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
             message: "Failed to join department",
-            });
-          }
-        }),
+          });
+        }
+      }),
 
     // Get my department memberships and their status
     getMyMemberships: protectedProcedure
@@ -7451,7 +7485,7 @@ export const deptRouter = createTRPCRouter({
       .mutation(async ({ input }) => {
         try {
           console.log(`🔄 Comprehensive Discord role sync initiated for user ${input.discordId}`);
-          
+
           // Validate API key
           if (!validateApiKey(input.apiKey)) {
             throw new TRPCError({
@@ -7490,7 +7524,7 @@ export const deptRouter = createTRPCRouter({
           ];
 
           const overallSuccess = (results.rankSync?.success ?? true) && (results.teamSync?.success ?? true);
-          
+
           const messages = [
             results.rankSync?.message,
             results.teamSync?.message
@@ -7555,7 +7589,7 @@ export const deptRouter = createTRPCRouter({
           // Update status to pending
           const result = await postgrestDb
             .update(deptSchema.departmentMembers)
-            .set({ 
+            .set({
               status: "pending",
               lastActiveDate: new Date(),
             })
@@ -7591,7 +7625,7 @@ export const deptRouter = createTRPCRouter({
               .from(deptSchema.departmentIdNumbers)
               .where(eq(deptSchema.departmentIdNumbers.departmentId, input.departmentId))
               .orderBy(asc(deptSchema.departmentIdNumbers.idNumber)),
-            
+
             // Get all members with their ID numbers
             postgrestDb
               .select({
@@ -7615,7 +7649,7 @@ export const deptRouter = createTRPCRouter({
 
           // Find inconsistencies
           const inconsistencies = [];
-          
+
           // Check for members with ID numbers that don't exist in tracking table
           for (const member of members) {
             if (member.departmentIdNumber) {
@@ -7667,6 +7701,3 @@ export const deptRouter = createTRPCRouter({
       }),
   }),
 });
-
-
-

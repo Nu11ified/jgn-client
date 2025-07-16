@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, pgTableCreator, unique } from "drizzle-orm/pg-core";
+import { index, pgTableCreator, unique, numeric } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
 import { type SelectType, type InsertType } from "./drizzle-types";
@@ -13,7 +13,7 @@ export const createDepartmentTable = pgTableCreator((name) => `dept_${name}`);
 // Enums for Department Types
 export const departmentTypeEnum = z.enum([
   "law_enforcement",
-  "fire_department", 
+  "fire_department",
   "staff_team"
 ]);
 export type DepartmentType = z.infer<typeof departmentTypeEnum>;
@@ -23,10 +23,10 @@ export const departmentMemberStatusEnum = z.enum([
   "in_training",
   "pending",
   "active",
-  "inactive", 
+  "inactive",
   "leave_of_absence",
   "warned_1",
-  "warned_2", 
+  "warned_2",
   "warned_3",
   "suspended",
   "blacklisted"
@@ -44,7 +44,7 @@ export type DepartmentClockStatus = z.infer<typeof departmentClockStatusEnum>;
 // Enums for Meeting Status
 export const departmentMeetingStatusEnum = z.enum([
   "scheduled",
-  "in_progress", 
+  "in_progress",
   "completed",
   "cancelled"
 ]);
@@ -54,7 +54,7 @@ export type DepartmentMeetingStatus = z.infer<typeof departmentMeetingStatusEnum
 export const departmentAttendanceStatusEnum = z.enum([
   "present",
   "absent",
-  "excused", 
+  "excused",
   "late"
 ]);
 export type DepartmentAttendanceStatus = z.infer<typeof departmentAttendanceStatusEnum>;
@@ -63,29 +63,29 @@ export type DepartmentAttendanceStatus = z.infer<typeof departmentAttendanceStat
 export const departmentPermissionsSchema = z.object({
   // Department-wide permissions
   manage_department: z.boolean().default(false),
-  manage_ranks: z.boolean().default(false), 
+  manage_ranks: z.boolean().default(false),
   manage_teams: z.boolean().default(false),
   manage_members: z.boolean().default(false),
   view_all_members: z.boolean().default(false),
-  
+
   // Member management permissions
   recruit_members: z.boolean().default(false),
   promote_members: z.boolean().default(false),
   demote_members: z.boolean().default(false),
   discipline_members: z.boolean().default(false),
   remove_members: z.boolean().default(false),
-  
+
   // Time tracking permissions
   manage_timeclock: z.boolean().default(false),
   view_all_timeclock: z.boolean().default(false),
   edit_timeclock: z.boolean().default(false),
-  
+
   // Meeting permissions
   schedule_meetings: z.boolean().default(false),
   manage_meetings: z.boolean().default(false),
   take_attendance: z.boolean().default(false),
   view_all_meetings: z.boolean().default(false),
-  
+
   // Team-specific permissions
   manage_team_members: z.boolean().default(false),
   view_team_members: z.boolean().default(true)
@@ -285,6 +285,34 @@ export type NewDepartmentCertification = InsertType<typeof departmentCertificati
 // Department Member Certification types
 export type DepartmentMemberCertification = SelectType<typeof departmentMemberCertifications>;
 export type NewDepartmentMemberCertification = InsertType<typeof departmentMemberCertifications>;
+
+// Department Performance Review types
+export type DepartmentPerformanceReview = SelectType<typeof departmentPerformanceReviews>;
+export type NewDepartmentPerformanceReview = InsertType<typeof departmentPerformanceReviews>;
+
+// Department Shift types
+export type DepartmentShift = SelectType<typeof departmentShifts>;
+export type NewDepartmentShift = InsertType<typeof departmentShifts>;
+
+// Department Equipment types
+export type DepartmentEquipment = SelectType<typeof departmentEquipment>;
+export type NewDepartmentEquipment = InsertType<typeof departmentEquipment>;
+
+// Department Equipment Assignment types
+export type DepartmentEquipmentAssignment = SelectType<typeof departmentEquipmentAssignments>;
+export type NewDepartmentEquipmentAssignment = InsertType<typeof departmentEquipmentAssignments>;
+
+// Department Equipment Maintenance types
+export type DepartmentEquipmentMaintenance = SelectType<typeof departmentEquipmentMaintenance>;
+export type NewDepartmentEquipmentMaintenance = InsertType<typeof departmentEquipmentMaintenance>;
+
+// Department Announcement types
+export type DepartmentAnnouncement = SelectType<typeof departmentAnnouncements>;
+export type NewDepartmentAnnouncement = InsertType<typeof departmentAnnouncements>;
+
+// Department Announcement Acknowledgment types
+export type DepartmentAnnouncementAcknowledgment = SelectType<typeof departmentAnnouncementAcknowledgments>;
+export type NewDepartmentAnnouncementAcknowledgment = InsertType<typeof departmentAnnouncementAcknowledgments>;
 
 // Table for Ranks within Departments
 export const departmentRanks = createDepartmentTable(
@@ -583,7 +611,7 @@ export const departmentPromotionHistory = createDepartmentTable(
 
 // Table for Disciplinary Actions
 export const departmentDisciplinaryActions = createDepartmentTable(
-  "disciplinary_actions", 
+  "disciplinary_actions",
   (d) => ({
     id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
     memberId: d.integer("member_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
@@ -667,6 +695,338 @@ export const departmentMemberCertifications = createDepartmentTable(
   ],
 );
 
+// Table for Equipment
+export const departmentEquipment = createDepartmentTable(
+  "equipment",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    departmentId: d.integer("department_id").references(() => departments.id, { onDelete: "cascade" }).notNull(),
+    name: d.varchar("name", { length: 256 }).notNull(),
+    category: d.varchar("category", {
+      length: 50,
+      enum: ["weapon", "vehicle", "radio", "protective_gear", "technology", "other"]
+    }).notNull(),
+    serialNumber: d.varchar("serial_number", { length: 100 }),
+    model: d.varchar("model", { length: 100 }),
+    manufacturer: d.varchar("manufacturer", { length: 100 }),
+    purchaseDate: d.timestamp("purchase_date", { withTimezone: true }),
+    warrantyExpiration: d.timestamp("warranty_expiration", { withTimezone: true }),
+    condition: d.varchar("condition", {
+      length: 20,
+      enum: ["excellent", "good", "fair", "poor", "damaged", "out_of_service"]
+    }).default("good").notNull(),
+    location: d.varchar("location", { length: 256 }),
+    isAssignable: d.boolean("is_assignable").default(true).notNull(),
+    requiresTraining: d.boolean("requires_training").default(false).notNull(),
+    maintenanceSchedule: d.varchar("maintenance_schedule", { length: 100 }),
+    notes: d.text("notes"),
+    isActive: d.boolean("is_active").default(true).notNull(),
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("equipment_dept_idx").on(t.departmentId),
+    index("equipment_category_idx").on(t.category),
+    index("equipment_condition_idx").on(t.condition),
+    index("equipment_serial_idx").on(t.serialNumber),
+    index("equipment_assignable_idx").on(t.isAssignable),
+    index("equipment_active_idx").on(t.isActive),
+  ]
+);
+
+// Table for Equipment Assignments
+export const departmentEquipmentAssignments = createDepartmentTable(
+  "equipment_assignments",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    equipmentId: d.integer("equipment_id").references(() => departmentEquipment.id, { onDelete: "cascade" }).notNull(),
+    memberId: d.integer("member_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
+    assignedDate: d.timestamp("assigned_date", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    returnDate: d.timestamp("return_date", { withTimezone: true }),
+    assignedCondition: d.varchar("assigned_condition", {
+      length: 20,
+      enum: ["excellent", "good", "fair", "poor", "damaged"]
+    }).default("good").notNull(),
+    returnCondition: d.varchar("return_condition", {
+      length: 20,
+      enum: ["excellent", "good", "fair", "poor", "damaged"]
+    }),
+    assignmentNotes: d.text("assignment_notes"),
+    returnNotes: d.text("return_notes"),
+    assignedBy: d.integer("assigned_by").references(() => departmentMembers.id, { onDelete: "set null" }),
+    returnedBy: d.integer("returned_by").references(() => departmentMembers.id, { onDelete: "set null" }),
+    isActive: d.boolean("is_active").default(true).notNull(),
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("assignment_equipment_idx").on(t.equipmentId),
+    index("assignment_member_idx").on(t.memberId),
+    index("assignment_date_idx").on(t.assignedDate),
+    index("assignment_active_idx").on(t.isActive),
+    index("assignment_assigned_by_idx").on(t.assignedBy),
+  ]
+);
+
+// Table for Equipment Maintenance Records
+export const departmentEquipmentMaintenance = createDepartmentTable(
+  "equipment_maintenance",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    equipmentId: d.integer("equipment_id").references(() => departmentEquipment.id, { onDelete: "cascade" }).notNull(),
+    maintenanceType: d.varchar("maintenance_type", {
+      length: 20,
+      enum: ["routine", "repair", "inspection", "calibration", "replacement"]
+    }).notNull(),
+    performedDate: d.timestamp("performed_date", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    performedBy: d.varchar("performed_by", { length: 256 }).notNull(),
+    description: d.text("description").notNull(),
+    cost: d.integer("cost"), // Cost in cents
+    nextMaintenanceDate: d.timestamp("next_maintenance_date", { withTimezone: true }),
+    notes: d.text("notes"),
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+  }),
+  (t) => [
+    index("maintenance_equipment_idx").on(t.equipmentId),
+    index("maintenance_type_idx").on(t.maintenanceType),
+    index("maintenance_date_idx").on(t.performedDate),
+    index("maintenance_next_date_idx").on(t.nextMaintenanceDate),
+  ]
+);
+
+// Table for Department Announcements
+export const departmentAnnouncements = createDepartmentTable(
+  "announcements",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    departmentId: d.integer("department_id").references(() => departments.id, { onDelete: "cascade" }).notNull(),
+    authorId: d.integer("author_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
+    title: d.varchar("title", { length: 256 }).notNull(),
+    content: d.text("content").notNull(),
+    priority: d.varchar("priority", {
+      length: 20,
+      enum: ["low", "normal", "high", "urgent"]
+    }).default("normal").notNull(),
+    targetAudience: d.varchar("target_audience", {
+      length: 20,
+      enum: ["all_members", "active_only", "specific_ranks", "specific_teams"]
+    }).notNull(),
+    targetRankIds: d.integer("target_rank_ids").array(),
+    targetTeamIds: d.integer("target_team_ids").array(),
+    publishedAt: d.timestamp("published_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    expiresAt: d.timestamp("expires_at", { withTimezone: true }),
+    requiresAcknowledgment: d.boolean("requires_acknowledgment").default(false).notNull(),
+    isActive: d.boolean("is_active").default(true).notNull(),
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("announcement_dept_idx").on(t.departmentId),
+    index("announcement_author_idx").on(t.authorId),
+    index("announcement_priority_idx").on(t.priority),
+    index("announcement_target_audience_idx").on(t.targetAudience),
+    index("announcement_published_idx").on(t.publishedAt),
+    index("announcement_expires_idx").on(t.expiresAt),
+    index("announcement_active_idx").on(t.isActive),
+  ]
+);
+
+// Table for Announcement Acknowledgments
+export const departmentAnnouncementAcknowledgments = createDepartmentTable(
+  "announcement_acknowledgments",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    announcementId: d.integer("announcement_id").references(() => departmentAnnouncements.id, { onDelete: "cascade" }).notNull(),
+    memberId: d.integer("member_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
+    acknowledgedAt: d.timestamp("acknowledged_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+  }),
+  (t) => [
+    index("ack_announcement_idx").on(t.announcementId),
+    index("ack_member_idx").on(t.memberId),
+    index("ack_timestamp_idx").on(t.acknowledgedAt),
+    unique("unique_member_announcement_ack").on(t.announcementId, t.memberId),
+  ]
+);
+
+// Table for Performance Reviews
+export const departmentPerformanceReviews = createDepartmentTable(
+  "performance_reviews",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    memberId: d.integer("member_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
+    reviewerId: d.integer("reviewer_id").references(() => departmentMembers.id, { onDelete: "set null" }).notNull(),
+    reviewPeriodStart: d.timestamp("review_period_start", { withTimezone: true }).notNull(),
+    reviewPeriodEnd: d.timestamp("review_period_end", { withTimezone: true }).notNull(),
+    overallRating: d.integer("overall_rating").notNull(), // 1-5 scale
+    strengths: d.text("strengths").notNull(),
+    areasForImprovement: d.text("areas_for_improvement").notNull(),
+    goals: d.text("goals").notNull(),
+    recommendedActions: d.text("recommended_actions").array().notNull(), // Array of action strings
+    reviewDate: d.timestamp("review_date", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    nextReviewDate: d.timestamp("next_review_date", { withTimezone: true }),
+    isActive: d.boolean("is_active").default(true).notNull(),
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("perf_review_member_idx").on(t.memberId),
+    index("perf_review_reviewer_idx").on(t.reviewerId),
+    index("perf_review_date_idx").on(t.reviewDate),
+    index("perf_review_period_idx").on(t.reviewPeriodStart, t.reviewPeriodEnd),
+    index("perf_review_rating_idx").on(t.overallRating),
+  ]
+);
+
+// Enums for Shift Types and Status
+export const departmentShiftTypeEnum = z.enum([
+  "patrol",
+  "training",
+  "administrative",
+  "special_ops",
+  "court_duty"
+]);
+export type DepartmentShiftType = z.infer<typeof departmentShiftTypeEnum>;
+
+export const departmentShiftStatusEnum = z.enum([
+  "scheduled",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "no_show"
+]);
+export type DepartmentShiftStatus = z.infer<typeof departmentShiftStatusEnum>;
+
+// Enums for Incident Types, Severity, and Status
+export const departmentIncidentTypeEnum = z.enum([
+  "arrest",
+  "citation",
+  "investigation",
+  "emergency_response",
+  "training",
+  "other"
+]);
+export type DepartmentIncidentType = z.infer<typeof departmentIncidentTypeEnum>;
+
+export const departmentIncidentSeverityEnum = z.enum([
+  "low",
+  "medium",
+  "high",
+  "critical"
+]);
+export type DepartmentIncidentSeverity = z.infer<typeof departmentIncidentSeverityEnum>;
+
+export const departmentIncidentStatusEnum = z.enum([
+  "draft",
+  "submitted",
+  "under_review",
+  "approved",
+  "rejected",
+  "closed"
+]);
+export type DepartmentIncidentStatus = z.infer<typeof departmentIncidentStatusEnum>;
+
+// Table for Shift Schedules
+export const departmentShifts = createDepartmentTable(
+  "shifts",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    departmentId: d.integer("department_id").references(() => departments.id, { onDelete: "cascade" }).notNull(),
+    memberId: d.integer("member_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
+    startTime: d.timestamp("start_time", { withTimezone: true }).notNull(),
+    endTime: d.timestamp("end_time", { withTimezone: true }).notNull(),
+    shiftType: d.varchar("shift_type", { length: 20, enum: departmentShiftTypeEnum.options }).notNull(),
+    status: d.varchar("status", { length: 20, enum: departmentShiftStatusEnum.options }).default("scheduled").notNull(),
+    notes: d.text("notes"),
+    scheduledBy: d.text("scheduled_by").notNull(), // Discord User ID of who scheduled the shift
+    actualStartTime: d.timestamp("actual_start_time", { withTimezone: true }), // When they actually clocked in
+    actualEndTime: d.timestamp("actual_end_time", { withTimezone: true }), // When they actually clocked out
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("shift_dept_idx").on(t.departmentId),
+    index("shift_member_idx").on(t.memberId),
+    index("shift_start_time_idx").on(t.startTime),
+    index("shift_end_time_idx").on(t.endTime),
+    index("shift_type_idx").on(t.shiftType),
+    index("shift_status_idx").on(t.status),
+    index("shift_scheduled_by_idx").on(t.scheduledBy),
+  ]
+);
+
+// Equipment-related enums
+export const departmentEquipmentCategoryEnum = z.enum([
+  "weapon",
+  "vehicle",
+  "radio",
+  "protective_gear",
+  "technology",
+  "other"
+]);
+export type DepartmentEquipmentCategory = z.infer<typeof departmentEquipmentCategoryEnum>;
+
+export const departmentEquipmentConditionEnum = z.enum([
+  "excellent",
+  "good",
+  "fair",
+  "poor",
+  "damaged",
+  "out_of_service"
+]);
+export type DepartmentEquipmentCondition = z.infer<typeof departmentEquipmentConditionEnum>;
+
+export const departmentEquipmentMaintenanceTypeEnum = z.enum([
+  "routine",
+  "repair",
+  "inspection",
+  "calibration",
+  "replacement"
+]);
+
+// Table for Incident Reports
+export const departmentIncidents = createDepartmentTable(
+  "incidents",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    departmentId: d.integer("department_id").references(() => departments.id, { onDelete: "cascade" }).notNull(),
+    reportingMemberId: d.integer("reporting_member_id").references(() => departmentMembers.id, { onDelete: "set null" }).notNull(),
+    incidentNumber: d.varchar("incident_number", { length: 50 }).notNull().unique(), // Auto-generated unique identifier
+    incidentType: d.varchar("incident_type", { length: 30, enum: departmentIncidentTypeEnum.options }).notNull(),
+    title: d.varchar("title", { length: 256 }).notNull(),
+    description: d.text("description").notNull(),
+    location: d.varchar("location", { length: 256 }),
+    dateOccurred: d.timestamp("date_occurred", { withTimezone: true }).notNull(),
+    dateReported: d.timestamp("date_reported", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    involvedMembers: d.integer("involved_members").array(), // Array of member IDs
+    involvedCivilians: d.jsonb("involved_civilians"), // JSON array of civilian information
+    evidence: d.jsonb("evidence"), // JSON array of evidence information
+    severity: d.varchar("severity", { length: 20, enum: departmentIncidentSeverityEnum.options }).default("medium").notNull(),
+    status: d.varchar("status", { length: 20, enum: departmentIncidentStatusEnum.options }).default("draft").notNull(),
+    reviewedBy: d.integer("reviewed_by").references(() => departmentMembers.id, { onDelete: "set null" }),
+    reviewedAt: d.timestamp("reviewed_at", { withTimezone: true }),
+    reviewNotes: d.text("review_notes"),
+    followUpRequired: d.boolean("follow_up_required").default(false).notNull(),
+    followUpDate: d.timestamp("follow_up_date", { withTimezone: true }),
+    tags: d.varchar("tags", { length: 100 }).array(), // Array of tag strings
+    isActive: d.boolean("is_active").default(true).notNull(),
+    createdAt: d.timestamp("created_at", { withTimezone: true }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: d.timestamp("updated_at", { withTimezone: true }).$onUpdate(() => new Date()),
+  }),
+  (t) => [
+    index("incident_dept_idx").on(t.departmentId),
+    index("incident_reporting_member_idx").on(t.reportingMemberId),
+    index("incident_number_idx").on(t.incidentNumber),
+    index("incident_type_idx").on(t.incidentType),
+    index("incident_severity_idx").on(t.severity),
+    index("incident_status_idx").on(t.status),
+    index("incident_date_occurred_idx").on(t.dateOccurred),
+    index("incident_date_reported_idx").on(t.dateReported),
+    index("incident_reviewed_by_idx").on(t.reviewedBy),
+    index("incident_active_idx").on(t.isActive),
+  ]
+);
+
 // --- RELATIONS ---
 export const departmentsRelations = relations(departments, ({ many }) => ({
   ranks: many(departmentRanks),
@@ -675,6 +1035,9 @@ export const departmentsRelations = relations(departments, ({ many }) => ({
   meetings: many(departmentMeetings),
   idNumbers: many(departmentIdNumbers),
   certifications: many(departmentCertifications),
+  incidents: many(departmentIncidents),
+  equipment: many(departmentEquipment),
+  announcements: many(departmentAnnouncements),
 }));
 
 export const departmentRanksRelations = relations(departmentRanks, ({ one, many }) => ({
@@ -721,6 +1084,18 @@ export const departmentMembersRelations = relations(departmentMembers, ({ one, m
   promotionHistory: many(departmentPromotionHistory),
   disciplinaryActions: many(departmentDisciplinaryActions),
   certifications: many(departmentMemberCertifications),
+  performanceReviews: many(departmentPerformanceReviews, {
+    relationName: "member",
+  }),
+  reviewsGiven: many(departmentPerformanceReviews, {
+    relationName: "reviewer",
+  }),
+  shifts: many(departmentShifts),
+  reportedIncidents: many(departmentIncidents, { relationName: "reportingMember" }),
+  reviewedIncidents: many(departmentIncidents, { relationName: "reviewer" }),
+  equipmentAssignments: many(departmentEquipmentAssignments),
+  authoredAnnouncements: many(departmentAnnouncements),
+  announcementAcknowledgments: many(departmentAnnouncementAcknowledgments),
 }));
 
 export const departmentTeamMembershipsRelations = relations(departmentTeamMemberships, ({ one }) => ({
@@ -827,4 +1202,95 @@ export const departmentIdNumbersRelations = relations(departmentIdNumbers, ({ on
     fields: [departmentIdNumbers.currentMemberId],
     references: [departmentMembers.id],
   }),
-})); 
+}));
+
+export const departmentPerformanceReviewsRelations = relations(departmentPerformanceReviews, ({ one }) => ({
+  member: one(departmentMembers, {
+    fields: [departmentPerformanceReviews.memberId],
+    references: [departmentMembers.id],
+    relationName: "member",
+  }),
+  reviewer: one(departmentMembers, {
+    fields: [departmentPerformanceReviews.reviewerId],
+    references: [departmentMembers.id],
+    relationName: "reviewer",
+  }),
+}));
+
+export const departmentShiftsRelations = relations(departmentShifts, ({ one }) => ({
+  department: one(departments, {
+    fields: [departmentShifts.departmentId],
+    references: [departments.id],
+  }),
+  member: one(departmentMembers, {
+    fields: [departmentShifts.memberId],
+    references: [departmentMembers.id],
+  }),
+}));
+
+export const departmentIncidentsRelations = relations(departmentIncidents, ({ one }) => ({
+  department: one(departments, {
+    fields: [departmentIncidents.departmentId],
+    references: [departments.id],
+  }),
+  reportingMember: one(departmentMembers, {
+    fields: [departmentIncidents.reportingMemberId],
+    references: [departmentMembers.id],
+    relationName: "reportingMember",
+  }),
+  reviewer: one(departmentMembers, {
+    fields: [departmentIncidents.reviewedBy],
+    references: [departmentMembers.id],
+    relationName: "reviewer",
+  }),
+}));
+
+export const departmentEquipmentRelations = relations(departmentEquipment, ({ one, many }) => ({
+  department: one(departments, {
+    fields: [departmentEquipment.departmentId],
+    references: [departments.id],
+  }),
+  assignments: many(departmentEquipmentAssignments),
+  maintenance: many(departmentEquipmentMaintenance),
+}));
+
+export const departmentEquipmentAssignmentsRelations = relations(departmentEquipmentAssignments, ({ one }) => ({
+  equipment: one(departmentEquipment, {
+    fields: [departmentEquipmentAssignments.equipmentId],
+    references: [departmentEquipment.id],
+  }),
+  member: one(departmentMembers, {
+    fields: [departmentEquipmentAssignments.memberId],
+    references: [departmentMembers.id],
+  }),
+}));
+
+export const departmentEquipmentMaintenanceRelations = relations(departmentEquipmentMaintenance, ({ one }) => ({
+  equipment: one(departmentEquipment, {
+    fields: [departmentEquipmentMaintenance.equipmentId],
+    references: [departmentEquipment.id],
+  }),
+}));
+
+export const departmentAnnouncementsRelations = relations(departmentAnnouncements, ({ one, many }) => ({
+  department: one(departments, {
+    fields: [departmentAnnouncements.departmentId],
+    references: [departments.id],
+  }),
+  author: one(departmentMembers, {
+    fields: [departmentAnnouncements.authorId],
+    references: [departmentMembers.id],
+  }),
+  acknowledgments: many(departmentAnnouncementAcknowledgments),
+}));
+
+export const departmentAnnouncementAcknowledgmentsRelations = relations(departmentAnnouncementAcknowledgments, ({ one }) => ({
+  announcement: one(departmentAnnouncements, {
+    fields: [departmentAnnouncementAcknowledgments.announcementId],
+    references: [departmentAnnouncements.id],
+  }),
+  member: one(departmentMembers, {
+    fields: [departmentAnnouncementAcknowledgments.memberId],
+    references: [departmentMembers.id],
+  }),
+}));

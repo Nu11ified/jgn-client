@@ -6,9 +6,9 @@ import { useParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { 
-  ArrowLeft, 
-  Clock, 
+import {
+  ArrowLeft,
+  Clock,
   Building,
   Shield,
   Flame,
@@ -20,7 +20,13 @@ import {
   Edit,
   User,
   Users,
-  UserCog
+  UserCog,
+  BarChart3,
+  Package,
+  FileText,
+  Star,
+  Megaphone,
+  CalendarDays
 } from "lucide-react";
 import { api } from "@/trpc/react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -86,18 +92,18 @@ export default function DepartmentDetailPage() {
   const { data: stats } = api.dept.user.info.getDepartmentStats.useQuery({ departmentId });
 
   // Check permissions for navigation
-  const { data: canViewRoster } = api.dept.user.checkPermission.useQuery({ 
+  const { data: canViewRoster } = api.dept.user.checkPermission.useQuery({
     departmentId,
     permission: 'view_all_members'
   }, { enabled: !!userMembership?.isActive });
 
   // Get both permissions
-  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ 
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({
     departmentId,
     permission: 'manage_members'
   });
 
-  const { data: canRecruitMembers } = api.dept.user.checkPermission.useQuery({ 
+  const { data: canRecruitMembers } = api.dept.user.checkPermission.useQuery({
     departmentId,
     permission: 'recruit_members'
   });
@@ -196,7 +202,7 @@ export default function DepartmentDetailPage() {
   };
 
   const formatStatus = (status: string) => {
-    return status.split('_').map(word => 
+    return status.split('_').map(word =>
       word.charAt(0).toUpperCase() + word.slice(1)
     ).join(' ');
   };
@@ -313,7 +319,7 @@ export default function DepartmentDetailPage() {
                     No description available for this department.
                   </p>
                 )}
-                
+
                 <div className="flex items-center gap-4 text-sm">
                   <div className="flex items-center gap-2">
                     <Building className="h-4 w-4 text-muted-foreground" />
@@ -340,7 +346,7 @@ export default function DepartmentDetailPage() {
                 <div>
                   <h4 className="font-medium mb-3">Ranks</h4>
                   <div className="space-y-2">
-                    {typedDepartmentInfo.ranks && Array.isArray(typedDepartmentInfo.ranks) ? 
+                    {typedDepartmentInfo.ranks && Array.isArray(typedDepartmentInfo.ranks) ?
                       typedDepartmentInfo.ranks
                         .sort((a, b) => (b.level ?? 0) - (a.level ?? 0))
                         .map((rank) => (
@@ -356,8 +362,8 @@ export default function DepartmentDetailPage() {
                             </div>
                           </div>
                         )) : (
-                          <p className="text-sm text-muted-foreground">No ranks available</p>
-                        )}
+                        <p className="text-sm text-muted-foreground">No ranks available</p>
+                      )}
                   </div>
                 </div>
 
@@ -402,7 +408,7 @@ export default function DepartmentDetailPage() {
                       <span className="text-muted-foreground">Callsign:</span>
                       <span className="font-medium">{userMembership.callsign}</span>
                     </div>
-                    
+
                     <div className="flex justify-between text-sm items-center">
                       <span className="text-muted-foreground">RP Name:</span>
                       <div className="flex items-center gap-2">
@@ -443,13 +449,13 @@ export default function DepartmentDetailPage() {
                               </div>
                             </div>
                             <DialogFooter>
-                              <Button 
-                                variant="outline" 
+                              <Button
+                                variant="outline"
                                 onClick={() => setIsRoleplayNameDialogOpen(false)}
                               >
                                 Cancel
                               </Button>
-                              <Button 
+                              <Button
                                 onClick={handleUpdateRoleplayName}
                                 disabled={updateRoleplayNameMutation.isPending}
                               >
@@ -460,17 +466,17 @@ export default function DepartmentDetailPage() {
                         </Dialog>
                       </div>
                     </div>
-                    
+
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Status:</span>
-                      <Badge 
+                      <Badge
                         variant="outline"
                         className={getStatusColor(userMembership.status)}
                       >
                         {formatStatus(userMembership.status)}
                       </Badge>
                     </div>
-                    
+
                     {userMembership.rankName && (
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Rank:</span>
@@ -484,14 +490,14 @@ export default function DepartmentDetailPage() {
                         </span>
                       </div>
                     )}
-                    
+
                     {userMembership.teamName && (
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Team:</span>
                         <span className="font-medium">{userMembership.teamName}</span>
                       </div>
                     )}
-                    
+
                     {userMembership.hireDate && (
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Joined:</span>
@@ -512,7 +518,7 @@ export default function DepartmentDetailPage() {
                   <div className="space-y-3">
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Status:</span>
-                      <Badge 
+                      <Badge
                         variant="outline"
                         className={getStatusColor(typedDepartmentInfo.existingMembership.status)}
                       >
@@ -544,21 +550,21 @@ export default function DepartmentDetailPage() {
                         Time Tracking
                       </Button>
                     </Link>
-                    
+
                     <Link href="/dashboard/departments/schedule">
                       <Button variant="outline" size="sm" className="w-full justify-start">
                         <Calendar className="h-4 w-4 mr-2" />
                         Schedule
                       </Button>
                     </Link>
-                    
+
                     <Link href="/dashboard/departments/performance">
                       <Button variant="outline" size="sm" className="w-full justify-start">
                         <TrendingUp className="h-4 w-4 mr-2" />
                         Performance
                       </Button>
                     </Link>
-                    
+
                     {/* Department Navigation */}
                     {canViewRoster?.hasPermission && (
                       <Link href={`/dashboard/departments/${departmentId}/roster`}>
@@ -568,7 +574,57 @@ export default function DepartmentDetailPage() {
                         </Button>
                       </Link>
                     )}
-                    
+
+                    {/* Advanced Department Features */}
+                    <Link href={`/dashboard/departments/${departmentId}/analytics`}>
+                      <Button variant="outline" size="sm" className="w-full justify-start">
+                        <BarChart3 className="h-4 w-4 mr-2" />
+                        Analytics & Reports
+                      </Button>
+                    </Link>
+
+                    <Link href={`/dashboard/departments/${departmentId}/scheduling`}>
+                      <Button variant="outline" size="sm" className="w-full justify-start">
+                        <CalendarDays className="h-4 w-4 mr-2" />
+                        Shift Scheduling
+                      </Button>
+                    </Link>
+
+                    <Link href={`/dashboard/departments/${departmentId}/incidents`}>
+                      <Button variant="outline" size="sm" className="w-full justify-start">
+                        <FileText className="h-4 w-4 mr-2" />
+                        Incident Reports
+                      </Button>
+                    </Link>
+
+                    <Link href={`/dashboard/departments/${departmentId}/equipment`}>
+                      <Button variant="outline" size="sm" className="w-full justify-start">
+                        <Package className="h-4 w-4 mr-2" />
+                        Equipment Management
+                      </Button>
+                    </Link>
+
+                    <Link href={`/dashboard/departments/${departmentId}/reviews`}>
+                      <Button variant="outline" size="sm" className="w-full justify-start">
+                        <Star className="h-4 w-4 mr-2" />
+                        Performance Reviews
+                      </Button>
+                    </Link>
+
+                    <Link href={`/dashboard/departments/${departmentId}/communications`}>
+                      <Button variant="outline" size="sm" className="w-full justify-start">
+                        <Megaphone className="h-4 w-4 mr-2" />
+                        Communications
+                      </Button>
+                    </Link>
+
+                    <Link href={`/dashboard/departments/${departmentId}/advanced`}>
+                      <Button variant="outline" size="sm" className="w-full justify-start">
+                        <Settings className="h-4 w-4 mr-2" />
+                        Advanced Operations
+                      </Button>
+                    </Link>
+
                     {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                       <Link href={`/dashboard/departments/${departmentId}/management`}>
                         <Button variant="outline" size="sm" className="w-full justify-start">
@@ -589,7 +645,7 @@ export default function DepartmentDetailPage() {
                         </Button>
                       </Link>
                     )}
-                    
+
                     {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                       <Link href={`/dashboard/departments/${departmentId}/management`}>
                         <Button variant="outline" size="sm" className="w-full justify-start">
@@ -598,7 +654,7 @@ export default function DepartmentDetailPage() {
                         </Button>
                       </Link>
                     )}
-                    
+
                     {!canViewRoster?.hasPermission && !(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                       <div className="text-center py-4 text-muted-foreground">
                         <p className="text-sm">
@@ -650,13 +706,13 @@ export default function DepartmentDetailPage() {
                         </div>
                       </div>
                       <DialogFooter>
-                        <Button 
-                          variant="outline" 
+                        <Button
+                          variant="outline"
                           onClick={() => setIsJoinDialogOpen(false)}
                         >
                           Cancel
                         </Button>
-                        <Button 
+                        <Button
                           onClick={handleJoinDepartment}
                           disabled={joinDepartmentMutation.isPending}
                         >
@@ -668,8 +724,8 @@ export default function DepartmentDetailPage() {
                 ) : (
                   <div className="text-center py-4 text-muted-foreground">
                     <p className="text-sm">
-                      {typedDepartmentInfo.existingMembership ? 
-                        "Your application is being processed" : 
+                      {typedDepartmentInfo.existingMembership ?
+                        "Your application is being processed" :
                         "Contact department leadership for more information"
                       }
                     </p>
@@ -688,12 +744,12 @@ export default function DepartmentDetailPage() {
                   <span className="text-muted-foreground">Ranks:</span>
                   <span className="font-medium">{typedDepartmentInfo.ranks?.length ?? 0}</span>
                 </div>
-                
+
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Teams:</span>
                   <span className="font-medium">{typedDepartmentInfo.teams?.length ?? 0}</span>
                 </div>
-                
+
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Total Members:</span>
                   <span className="font-medium">

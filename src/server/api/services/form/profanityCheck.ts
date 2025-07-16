@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 
-// Common slurs and derogatory terms (partial list - you should expand this based on your needs)
+// Common slurs and derogatory terms
 const SLURS_AND_DEROGATORY_TERMS = [
   // Racial slurs
   "n*gger", "n*gga", "ch*nk", "sp*c", "w*tback", "k*ke", "g*ok", "r*ghead",
@@ -13,8 +13,8 @@ const SLURS_AND_DEROGATORY_TERMS = [
 
 // Spam patterns
 const SPAM_PATTERNS = [
-  /(.)\1{10,}/, // Repeated characters (10+ times)
-  /^(.{1,10})\1{5,}$/, // Repeated short phrases (5+ times)
+  /(.)\1{20,}/, // Repeated characters (20+ times)
+  /^(.{1,10})\1{20,}$/, // Repeated short phrases (5+ times)
   /[A-Z]{20,}/, // Excessive caps (20+ consecutive)
   /[!@#$%^&*()]{10,}/, // Excessive special characters
   /\b(buy|sell|cheap|free|click|visit|www\.|http|\.com|\.net|\.org)\b.*\b(now|today|here|link)\b/i, // Common spam phrases

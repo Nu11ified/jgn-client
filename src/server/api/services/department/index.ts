@@ -19,6 +19,16 @@ export * from "./callsignService";
 // Export main member sync service
 export * from "./memberSyncService";
 
+// Export new enhanced services
+export * from "./analyticsService";
+export * from "./schedulingService";
+export * from "./equipmentService";
+export * from "./incidentService";
+export * from "./communicationService";
+export * from "./bulkOperationsService";
+export * from "./searchService";
+export * from "./performanceReviewService";
+
 // Re-export specific functions for backwards compatibility
 export {
   removeDiscordRolesForInactiveMember,

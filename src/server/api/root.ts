@@ -4,6 +4,7 @@ import { userRouter } from "@/server/api/routers/user";
 import { formRouter } from "@/server/api/routers/formRouter";
 import { deptRouter } from "@/server/api/routers/deptRouter";
 import { discordRouter } from "./routers/discordRouter";
+import { deptMoreRouter } from "./routers/department/deptMore"
 
 /**
  * This is the primary router for your server.
@@ -16,6 +17,7 @@ export const appRouter = createTRPCRouter({
     form: formRouter,
     dept: deptRouter,
     discord: discordRouter,
+    deptMore: deptMoreRouter
 });
 
 // export type definition of API

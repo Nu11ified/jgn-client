@@ -617,13 +617,14 @@ export default function DepartmentDetailPage() {
                         Communications
                       </Button>
                     </Link>
-
+                    {/*
                     <Link href={`/dashboard/departments/${departmentId}/advanced`}>
                       <Button variant="outline" size="sm" className="w-full justify-start">
                         <Settings className="h-4 w-4 mr-2" />
                         Advanced Operations
                       </Button>
                     </Link>
+                    */}
 
                     {(canManageMembers?.hasPermission ?? canRecruitMembers?.hasPermission) && (
                       <Link href={`/dashboard/departments/${departmentId}/management`}>

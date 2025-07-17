@@ -1,15 +1,27 @@
 import { TRPCError } from "@trpc/server";
 
-// Common slurs and derogatory terms
+// Common slurs and derogatory terms - using more precise patterns
 const SLURS_AND_DEROGATORY_TERMS = [
-  // Racial slurs
-  "n*gger", "n*gga", "ch*nk", "sp*c", "w*tback", "k*ke", "g*ok", "r*ghead",
+  // Racial slurs - using word boundaries and more specific patterns
+  "\\bn[i1!@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}gg?[e3a@]{1,2}r?\\b",
+  "\\bn[i1!@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}gg?[a@4]{1,2}\\b",
+  "\\bch[i1!@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}nk\\b",
+  "\\bsp[i1!@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}c\\b",
+  "\\bw[e3@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}tb[a@4]{1,2}ck\\b",
+  "\\bk[i1!@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}k[e3@]{1,2}\\b",
+  "\\bg[o0@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}[o0@]{1,2}k\\b",
+  "\\br[a@4#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}gh[e3@]{1,2}[a@4]{1,2}d\\b",
   // Homophobic slurs  
-  "f*ggot", "f*g", "d*ke", "tr*nny",
+  "\\bf[a@4#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}gg?[o0@]{1,2}t\\b",
+  "\\bf[a@4#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}g\\b",
+  "\\bd[i1!@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}k[e3@]{1,2}\\b",
+  "\\btr[a@4#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}nn?[y]{1,2}\\b",
   // General offensive terms
-  "ret*rd", "ret*rded", "sp*stic", "cr*pple",
-  // Add more as needed - use asterisks to avoid false positives
-].map(term => term.replace(/\*/g, '[a-z*@#$%^&!0-9]*'));
+  "\\br[e3@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}t[a@4]{1,2}rd\\b",
+  "\\br[e3@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}t[a@4]{1,2}rd[e3@]{1,2}d\\b",
+  "\\bsp[a@4#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}st[i1!]{1,2}c\\b",
+  "\\bcr[i1!@#$%^&*()_+=\\-\\[\\]{}|\\\\:;\"'<>,.?/~`]{1,3}ppl[e3@]{1,2}\\b"
+].map(pattern => new RegExp(pattern, 'i'));
 
 // Spam patterns
 const SPAM_PATTERNS = [
@@ -51,11 +63,10 @@ export function analyzeTextContent(text: string): ContentAnalysis {
   }
 
   const normalizedText = text.toLowerCase().trim();
-  
+
   // Check for slurs and derogatory terms
   const slurMatches = SLURS_AND_DEROGATORY_TERMS.filter(pattern => {
-    const regex = new RegExp(pattern, 'i');
-    return regex.test(normalizedText);
+    return pattern.test(normalizedText);
   });
 
   if (slurMatches.length > 0) {
@@ -132,7 +143,7 @@ export function checkRateLimit(userId: string, formId: number): { allowed: boole
   const maxSubmissions = 5; // Max 5 submissions per hour per form
 
   const existing = submissionTracker.get(key);
-  
+
   if (!existing) {
     submissionTracker.set(key, { count: 1, lastSubmission: now, windowStart: now });
     return { allowed: true };
@@ -155,10 +166,10 @@ export function checkRateLimit(userId: string, formId: number): { allowed: boole
   }
 
   // Update tracker
-  submissionTracker.set(key, { 
-    count: existing.count + 1, 
-    lastSubmission: now, 
-    windowStart: existing.windowStart 
+  submissionTracker.set(key, {
+    count: existing.count + 1,
+    lastSubmission: now,
+    windowStart: existing.windowStart
   });
 
   return { allowed: true };
@@ -187,7 +198,7 @@ export function validateFormContent({ answers, userId, formId }: FormContentChec
 
   for (const answer of answers) {
     let textToAnalyze = '';
-    
+
     if (typeof answer.value === 'string') {
       textToAnalyze = answer.value;
     } else if (Array.isArray(answer.value)) {
@@ -197,10 +208,10 @@ export function validateFormContent({ answers, userId, formId }: FormContentChec
     }
 
     const analysis = analyzeTextContent(textToAnalyze);
-    
+
     if (!analysis.isClean) {
       totalIssues++;
-      
+
       if (analysis.severity === 'critical') {
         criticalIssues++;
         errors.push(`Question ${answer.questionId}: ${analysis.blockedReasons.join(', ')}`);

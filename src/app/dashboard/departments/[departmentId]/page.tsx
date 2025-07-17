@@ -617,6 +617,7 @@ export default function DepartmentDetailPage() {
                         Communications
                       </Button>
                     </Link>
+                    
                     {/*
                     <Link href={`/dashboard/departments/${departmentId}/advanced`}>
                       <Button variant="outline" size="sm" className="w-full justify-start">

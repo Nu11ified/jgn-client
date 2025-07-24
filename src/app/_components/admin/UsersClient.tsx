@@ -39,7 +39,7 @@ interface AdminUser {
   id?: string;
   username: string;
   discriminator?: string;
-  avatar: string | null;
+  avatar?: string | null;
   bot?: boolean;
   system?: boolean;
   mfa_enabled?: boolean;
@@ -73,14 +73,19 @@ interface UsersClientProps {
 }
 
 const ESTIMATED_ROW_HEIGHT = 50;
-const PAGE_SIZE = 100;
-const TOTAL_EXPECTED_USERS = 9678;
+// Increase page size a bit to reduce round-trips without overloading the browser
+const PAGE_SIZE = 500;
+
+// We will not attempt to fetch everything up-front.  Instead, we lazily page while
+// the user scrolls.  The server will tell us when we’re done by returning fewer
+// than PAGE_SIZE items.
 
 export default function UsersClient({ initialUsers }: UsersClientProps) {
   const [allFetchedUsers, setAllFetchedUsers] = useState<User[]>(initialUsers ?? []);
-  const [isFetchingAll, setIsFetchingAll] = useState(true);
+  const [isFetchingPage, setIsFetchingPage] = useState(false);
+  // Assume there are more pages until API returns fewer than PAGE_SIZE rows.
+  const [hasMore, setHasMore] = useState<boolean>(true);
   const [fetchingError, setFetchingError] = useState<string | null>(null);
-  const [currentSkipForProgress, setCurrentSkipForProgress] = useState(initialUsers?.length ?? 0);
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const [hasTsUidFilter, setHasTsUidFilter] = useState<HasTsUidFilter>('all');
   
@@ -95,7 +100,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
     filteredData: initialFilteredUsers,
   } = useTableControls<User>({
     data: allFetchedUsers,
-    searchKeys: ['username', 'id', 'ts_uid'],
+    searchKeys: ['username', 'id', 'ts_uid', 'discord_id'],
   });
 
   // Add additional filtering
@@ -185,86 +190,37 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
     }
   };
 
+  // Fetch the next page when needed
+  const fetchNextPage = async () => {
+    if (isFetchingPage || !hasMore) return;
+    setIsFetchingPage(true);
+    const currentSkip = allFetchedUsers.length;
+    try {
+      const nextPageUsers = await trpcUtils.admin.users.listUsers.fetch({ skip: currentSkip, limit: PAGE_SIZE });
+      if (nextPageUsers && nextPageUsers.length > 0) {
+        const validNextPageUsers = (nextPageUsers as User[]).filter(Boolean);
+        setAllFetchedUsers(prev => [...prev, ...validNextPageUsers]);
+        if (validNextPageUsers.length < PAGE_SIZE) {
+          setHasMore(false); // Reached the end
+        }
+      } else {
+        setHasMore(false);
+      }
+    } catch (error) {
+      console.error("Error fetching next page of users:", error);
+      setFetchingError("Failed to fetch additional users.");
+    } finally {
+      setIsFetchingPage(false);
+    }
+  };
+
+  // Fetch first page automatically if no initial data
   useEffect(() => {
-    let active = true;
-    
-    async function fetchAllLoop() {
-      if (!active || !isFetchingAll) return;
-
-      let accumulatedUsersInternal: User[] = [...(initialUsersRef.current ?? [])];
-      let currentPosition = initialUsersRef.current?.length ?? 0;
-
-      if (allFetchedUsers.length > (initialUsersRef.current?.length ?? 0)) {
-        currentPosition = allFetchedUsers.length;
-        accumulatedUsersInternal = [...allFetchedUsers];
-      }
-      
-      const needsFetching = accumulatedUsersInternal.length < TOTAL_EXPECTED_USERS || 
-                            (accumulatedUsersInternal.length === 0 && TOTAL_EXPECTED_USERS > 0);
-
-      if (!needsFetching) {
-        if (active) setIsFetchingAll(false);
-        if (JSON.stringify(allFetchedUsers) !== JSON.stringify(accumulatedUsersInternal)) {
-            setAllFetchedUsers(accumulatedUsersInternal);
-        }
-        return;
-      }
-
-      if(!isFetchingAll && active) setIsFetchingAll(true); 
-
-      let hasMoreToFetch = true;
-
-      try {
-        while (hasMoreToFetch && active) {
-          console.log(`Fetching users: skip=${currentPosition}, limit=${PAGE_SIZE}`);
-          const nextPageUsers = await trpcUtils.admin.users.listUsers.fetch({ skip: currentPosition, limit: PAGE_SIZE });
-          
-          if (!active) break;
-
-          if (nextPageUsers && nextPageUsers.length > 0) {
-            const validNextPageUsers = (nextPageUsers as User[]).filter(Boolean);
-            accumulatedUsersInternal = [...accumulatedUsersInternal, ...validNextPageUsers];
-            setAllFetchedUsers(prev => [...prev.filter(Boolean), ...validNextPageUsers]); 
-            currentPosition += validNextPageUsers.length;
-            setCurrentSkipForProgress(currentPosition);
-            if (validNextPageUsers.length < PAGE_SIZE) {
-              hasMoreToFetch = false;
-            }
-          } else {
-            hasMoreToFetch = false;
-          }
-          if (accumulatedUsersInternal.length >= TOTAL_EXPECTED_USERS) {
-            hasMoreToFetch = false;
-          }
-          if (currentPosition > TOTAL_EXPECTED_USERS + (PAGE_SIZE * 5)) { 
-            console.warn("Fetched significantly more users than expected, stopping.");
-            hasMoreToFetch = false;
-            if(active) setFetchingError("Fetched more data than expected. Display may be incomplete.");
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching all users:", error);
-        if (active) {
-          setFetchingError("Failed to load all user data. Some users may be missing.");
-        }
-      } finally {
-        if (active) {
-          setIsFetchingAll(false);
-        }
-      }
+    if (allFetchedUsers.length === 0) {
+      void fetchNextPage();
     }
-    
-    if (allFetchedUsers.length < TOTAL_EXPECTED_USERS || (allFetchedUsers.length === 0 && TOTAL_EXPECTED_USERS > 0)) {
-        void fetchAllLoop();
-    } else {
-        if(isFetchingAll) setIsFetchingAll(false);
-    }
-
-    return () => {
-      active = false;
-      console.log("UserClient: Fetch all effect cleanup");
-    };
-  }, [trpcUtils, allFetchedUsers.length, isFetchingAll, allFetchedUsers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -277,7 +233,17 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
 
   const virtualItems = rowVirtualizer.getVirtualItems();
 
-  const isLoadingUiForInitialData = isFetchingAll && allFetchedUsers.length < PAGE_SIZE && allFetchedUsers.length < TOTAL_EXPECTED_USERS;
+  // Trigger fetch when user scrolls near the end of loaded data
+  useEffect(() => {
+    if (!hasMore) return;
+    if (virtualItems.length === 0) return;
+    const lastItem = virtualItems[virtualItems.length - 1];
+    if (lastItem && lastItem.index >= allFetchedUsers.length - 10) {
+      void fetchNextPage();
+    }
+  }, [virtualItems, hasMore]);
+
+  const isLoadingUiForInitialData = allFetchedUsers.length === 0 && isFetchingPage;
 
   // Modify the existing table row to add a role management button
   const renderTableRow = (user: User, virtualItem: VirtualItem) => (
@@ -365,21 +331,21 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
     );
   }
   
-  if (isFetchingAll && allFetchedUsers.length < TOTAL_EXPECTED_USERS && !isLoadingUiForInitialData) {
-    const progressValue = Math.min(100, Math.floor((currentSkipForProgress / TOTAL_EXPECTED_USERS) * 100));
+  if (isFetchingPage && !isLoadingUiForInitialData) {
+    // Show indeterminate loader since total count is unknown
     return (
       <Card className="shadow-lg w-full max-w-md mx-auto">
         <CardHeader className="text-center">
           <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
           <CardTitle className="text-xl">Loading All Users</CardTitle>
           <CardDescription>
-            Fetching {TOTAL_EXPECTED_USERS.toLocaleString()} records. This may take a moment...
+            Loading more users…
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-0">
-          <Progress value={progressValue} className="w-full" />
+          <Progress className="w-full" />
           <p className="text-sm text-muted-foreground text-center mt-2">
-            Loaded {currentSkipForProgress.toLocaleString()} of {TOTAL_EXPECTED_USERS.toLocaleString()} users ({progressValue}%).
+            Currently loaded {allFetchedUsers.length.toLocaleString()} user records
           </p>
           {fetchingError && 
             <p className="text-sm text-destructive text-center mt-2">
@@ -391,7 +357,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
     );
   }
   
-  if (!isFetchingAll && fetchingError && allFetchedUsers.length === 0) {
+  if (!isFetchingPage && fetchingError && allFetchedUsers.length === 0) {
      return (
       <Card className="w-full max-w-lg mx-auto">
         <CardHeader className="text-center">
@@ -416,8 +382,10 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
         </div>
         <CardDescription>
           Displaying {totalFilteredItems.toLocaleString()} user(s) of {allFetchedUsers.length.toLocaleString()} loaded. 
-          {isFetchingAll && allFetchedUsers.length < TOTAL_EXPECTED_USERS && "(Still loading more...)"}
-          {fetchingError && !isFetchingAll && <span className="text-destructive">(Load incomplete)</span>}
+          {isFetchingPage && hasMore && " Loading more…"}
+          {fetchingError && !isFetchingPage && allFetchedUsers.length > 0 && (
+            <span className="text-destructive">(Load incomplete)</span>
+          )}
         </CardDescription>
         <div className="mt-4 flex flex-col gap-4">
           <div className="flex items-center gap-4">
@@ -428,7 +396,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-10"
-                disabled={isFetchingAll && allFetchedUsers.length < PAGE_SIZE}
+                disabled={isFetchingPage && hasMore && allFetchedUsers.length < PAGE_SIZE}
               />
             </div>
             <Select value={roleFilter} onValueChange={(value) => setRoleFilter(value as RoleFilter)}>
@@ -456,7 +424,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
               </SelectContent>
             </Select>
           </div>
-          {fetchingError && !isFetchingAll && allFetchedUsers.length > 0 && (
+          {fetchingError && !isFetchingPage && allFetchedUsers.length > 0 && (
             <p className="text-xs text-destructive">
               <AlertTriangle className="inline h-3 w-3 mr-1"/> {fetchingError}
             </p>
@@ -464,7 +432,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
         </div>
       </CardHeader>
       <CardContent>
-        {(!filteredUsers || filteredUsers.length === 0) && !isFetchingAll ? (
+        {(!filteredUsers || filteredUsers.length === 0) && !isFetchingPage ? (
            <div className="text-center py-8">
             <Search className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
             <p className="text-lg font-semibold">No Users Found</p>
@@ -478,7 +446,7 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
             <Table>
               <TableCaption>
                 Showing {virtualItems.length} of {totalFilteredItems.toLocaleString()} users (virtualized).
-                {isFetchingAll && allFetchedUsers.length < TOTAL_EXPECTED_USERS && " Loading more..."}
+                {isFetchingPage && hasMore && " Loading more…"}
               </TableCaption>
               <TableHeader 
                 style={{ 

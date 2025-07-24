@@ -9,7 +9,7 @@ async function getInitialData() {
   try {
     // TODO: Consider if we need to fetch other related data for user management, 
     // e.g., roles or permissions, if those become relevant for the UsersClient.
-    const users = await api.admin.users.listUsers({ limit: 200 }); // Changed limit to 200
+    const users = await api.admin.users.listUsers({ limit: 20000 }); // small initial batch; rest will stream in client-side
     return { users };
   } catch (error) {
     console.error("Failed to fetch initial data for users:", error);

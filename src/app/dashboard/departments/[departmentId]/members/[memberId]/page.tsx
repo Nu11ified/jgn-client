@@ -210,23 +210,19 @@ export default function MemberDetailsPage() {
 
   // Check if user is trying to act on themselves, and check rank hierarchy
   const isActingOnSelf = currentUser?.discordId === memberData?.discordId;
-  // Fix: memberData may not have departmentId, so match on memberId instead
+  
+  // Find current user in the current department
   const currentUserMember = currentUserInfo?.members?.find(
-    m => m.discordId === currentUser?.discordId && m.id === memberData?.id
+    m => m.discordId === currentUser?.discordId
   );
+  
+  // User must be a member of this department to manage others
+  const isUserMemberOfDepartment = !!currentUserMember;
   const currentUserRankLevel = currentUserMember?.rankLevel ?? 0;
   const targetMemberRankLevel = memberData?.rankLevel ?? 0;
-  const canManageBasedOnRank = !isActingOnSelf && currentUserRankLevel > targetMemberRankLevel;
+  const canManageBasedOnRank = !isActingOnSelf && isUserMemberOfDepartment && currentUserRankLevel > targetMemberRankLevel;
 
-  // Temporary log for debugging rank permissions
-  if (memberData) {
-    console.log("Rank Permission Debug:", {
-      isActingOnSelf,
-      currentUserRankLevel,
-      targetMemberRankLevel,
-      canManageBasedOnRank,
-    });
-  }
+  // Rank permission check completed
 
   // Mutations with sync notifications
   const updateMemberMutation = api.dept.user.members.update.useMutation({
@@ -636,6 +632,28 @@ export default function MemberDetailsPage() {
             <Link href={`/dashboard/departments/${departmentId}/roster`}>
               <Button>
                 Back to Roster
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if current user is a member of this department
+  if (!isUserMemberOfDepartment) {
+    return (
+      <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center">
+            <AlertTriangle className="mx-auto h-12 w-12 text-red-500 mb-4" />
+            <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+            <p className="text-muted-foreground mb-4">
+              You are not a member of this department and cannot access member management.
+            </p>
+            <Link href="/dashboard/departments">
+              <Button>
+                Back to Departments
               </Button>
             </Link>
           </div>

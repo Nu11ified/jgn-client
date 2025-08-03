@@ -210,7 +210,10 @@ export default function MemberDetailsPage() {
 
   // Check if user is trying to act on themselves, and check rank hierarchy
   const isActingOnSelf = currentUser?.discordId === memberData?.discordId;
-  const currentUserMember = currentUserInfo?.members?.find(m => m.discordId === currentUser?.discordId);
+  // Fix: memberData may not have departmentId, so match on memberId instead
+  const currentUserMember = currentUserInfo?.members?.find(
+    m => m.discordId === currentUser?.discordId && m.id === memberData?.id
+  );
   const currentUserRankLevel = currentUserMember?.rankLevel ?? 0;
   const targetMemberRankLevel = memberData?.rankLevel ?? 0;
   const canManageBasedOnRank = !isActingOnSelf && currentUserRankLevel > targetMemberRankLevel;

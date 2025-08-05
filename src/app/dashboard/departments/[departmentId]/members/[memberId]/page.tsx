@@ -129,41 +129,47 @@ export default function MemberDetailsPage() {
   // Get department info for dropdowns
   const { data: departmentInfo } = api.dept.user.info.getDepartment.useQuery({ departmentId });
 
-  // Get user permissions
+  // Get user permissions - only run when departmentId is available
   const { data: permissions } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'manage_members'
+  }, {
+    enabled: !!departmentId && departmentId > 0
   });
 
   const { data: promotePermission } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'promote_members'
+  }, {
+    enabled: !!departmentId && departmentId > 0
   });
 
   const { data: demotePermission } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'demote_members'
+  }, {
+    enabled: !!departmentId && departmentId > 0
   });
 
   const { data: disciplinePermission } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'discipline_members'
+  }, {
+    enabled: !!departmentId && departmentId > 0
   });
 
   const { data: timeclockViewPermission } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'view_all_timeclock'
+  }, {
+    enabled: !!departmentId && departmentId > 0
   });
 
   const { data: timeclockManagePermission } = api.dept.user.checkPermission.useQuery({ 
     departmentId,
     permission: 'manage_timeclock'
-  });
-
-  // Get current user's information to check rank hierarchy and prevent self-editing
-  const { data: currentUserInfo } = api.dept.user.info.getDepartmentRoster.useQuery({
-    departmentId,
-    includeInactive: false,
+  }, {
+    enabled: !!departmentId && departmentId > 0
   });
 
   // Get current user's Discord ID to identify themselves
@@ -208,19 +214,48 @@ export default function MemberDetailsPage() {
   const canDiscipline = disciplinePermission?.hasPermission ?? false;
   const canViewTimeclock = (timeclockViewPermission?.hasPermission ?? false) || (timeclockManagePermission?.hasPermission ?? false);
 
-  // Check if user is trying to act on themselves, and check rank hierarchy
+  // Check if user is trying to act on themselves
   const isActingOnSelf = currentUser?.discordId === memberData?.discordId;
   
+  // Use the permissions query to determine if user is a member and has access
+  // The permissions query already checks if the user is a member of the department
+  // If permissions is undefined, it means the query is still loading
+  // If permissions.hasPermission is false, it means the user is not a member or doesn't have permission
+  const isUserMemberOfDepartment = permissions?.hasPermission === true;
+  
+  // For rank-based checks, we need to get the current user's rank in this department
+  // We'll use a separate query to get the current user's membership info for this department
+  const { data: currentUserMembership } = api.dept.user.info.getDepartmentRoster.useQuery({
+    departmentId,
+    includeInactive: false,
+    memberIdFilter: undefined, // Get all members to find current user
+  }, {
+    enabled: !!currentUser?.discordId && !!departmentId,
+  });
+
   // Find current user in the current department
-  const currentUserMember = currentUserInfo?.members?.find(
+  const currentUserMember = currentUserMembership?.members?.find(
     m => m.discordId === currentUser?.discordId
   );
   
-  // User must be a member of this department to manage others
-  const isUserMemberOfDepartment = !!currentUserMember;
   const currentUserRankLevel = currentUserMember?.rankLevel ?? 0;
   const targetMemberRankLevel = memberData?.rankLevel ?? 0;
   const canManageBasedOnRank = !isActingOnSelf && isUserMemberOfDepartment && currentUserRankLevel > targetMemberRankLevel;
+
+  // Debug logging to help understand permission issues
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Permission Debug:', {
+      departmentId,
+      memberId,
+      permissions,
+      isUserMemberOfDepartment,
+      currentUser: currentUser?.discordId,
+      memberData: memberData?.discordId,
+      currentUserRankLevel,
+      targetMemberRankLevel,
+      canManageBasedOnRank
+    });
+  }
 
   // Rank permission check completed
 
@@ -602,7 +637,8 @@ export default function MemberDetailsPage() {
     );
   })();
 
-  if (memberLoading) {
+  // Show loading state while member data, permissions, or current user are loading
+  if (memberLoading || permissions === undefined || !currentUser) {
     return (
       <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
         <div className="space-y-6">
@@ -641,7 +677,12 @@ export default function MemberDetailsPage() {
   }
 
   // Check if current user is a member of this department
-  if (!isUserMemberOfDepartment) {
+  // Only show access denied if permissions have loaded and user doesn't have access
+  // Allow users to view their own profile even if they don't have manage_members permission
+  const isViewingOwnProfile = currentUser?.discordId === memberData?.discordId;
+  const shouldShowAccessDenied = permissions !== undefined && !isUserMemberOfDepartment && !isViewingOwnProfile;
+  
+  if (shouldShowAccessDenied) {
     return (
       <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-center min-h-[400px]">
@@ -649,7 +690,14 @@ export default function MemberDetailsPage() {
             <AlertTriangle className="mx-auto h-12 w-12 text-red-500 mb-4" />
             <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
             <p className="text-muted-foreground mb-4">
-              You are not a member of this department and cannot access member management.
+              {permissions?.hasPermission === false 
+                ? "You do not have permission to manage members in this department."
+                : "You are not a member of this department and cannot access member management."}
+              {isViewingOwnProfile && (
+                <span className="block mt-2 text-sm">
+                  Note: You can view your own profile, but management features are restricted.
+                </span>
+              )}
             </p>
             <Link href="/dashboard/departments">
               <Button>
@@ -685,7 +733,8 @@ export default function MemberDetailsPage() {
           </div>
           
           {/* Ensure this entire block is conditional on manage_members permission */}
-          {(permissions?.hasPermission ?? false) && (
+          {/* Only show management features if user has permission and is not viewing their own profile */}
+          {(permissions?.hasPermission ?? false) && !isViewingOwnProfile && (
             <div className="flex items-center space-x-2">
               {isEditing ? (
                 <>
@@ -950,7 +999,7 @@ export default function MemberDetailsPage() {
               {/* Time Tracking & Actions */}
               <div className="space-y-6">
                 {/* Time Tracking Information */}
-                {canViewTimeclock && (
+                {canViewTimeclock && !isViewingOwnProfile && (
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -1032,7 +1081,7 @@ export default function MemberDetailsPage() {
                 )}
 
                 {/* Performance Section */}
-                {(permissions?.hasPermission ?? false) && (
+                {(permissions?.hasPermission ?? false) && !isViewingOwnProfile && (
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
@@ -1287,7 +1336,7 @@ export default function MemberDetailsPage() {
                 )}
 
                 {/* Notes and Actions */}
-                {(permissions?.hasPermission ?? false) && (
+                {(permissions?.hasPermission ?? false) && !isViewingOwnProfile && (
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">

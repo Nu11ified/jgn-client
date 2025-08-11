@@ -501,13 +501,26 @@ const getRankLimitInfo = async (
   }
 };
 
-function assertCanActOnMember({ actorDiscordId, actorRankLevel, targetDiscordId, targetRankLevel, actionName }: { actorDiscordId: string; actorRankLevel: number; targetDiscordId: string; targetRankLevel: number; actionName: string; }) {
+function assertCanActOnMember({ actorDiscordId, actorRankLevel, targetDiscordId, targetRankLevel, actionName }: { actorDiscordId: string; actorRankLevel: number | null | undefined; targetDiscordId: string; targetRankLevel: number | null | undefined; actionName: string; }) {
   if (actorDiscordId === targetDiscordId) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `You cannot ${actionName} for yourself.`,
     });
   }
+
+  // Ensure both ranks are known and comparable
+  if (actorRankLevel == null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Your department rank is not assigned. Please contact an administrator.`,
+    });
+  }
+  if (targetRankLevel == null) {
+    // If target has no rank, treat as lowest rank and allow action
+    return;
+  }
+
   if (targetRankLevel >= actorRankLevel) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -3686,8 +3699,40 @@ export const deptRouter = createTRPCRouter({
             });
           }
           const actorMember = actorMemberQuery[0]!;
-          const actorPermissions = actorMember.permissions;
-          const actorRankLevel = actorMember.rankLevel ?? 0;
+          let actorPermissions = actorMember.permissions;
+          let actorRankLevel = actorMember.rankLevel ?? 0;
+
+          // If actor has manage_members but rank level is missing/zero, try to resync from Discord and refresh
+          if ((actorRankLevel === 0 || actorRankLevel == null) && actorPermissions?.manage_members) {
+            try {
+              await updateUserRankFromDiscordRoles(actorDiscordId, targetMember.departmentId);
+              const refreshed = await postgrestDb
+                .select({
+                  rankId: deptSchema.departmentMembers.rankId,
+                  permissions: deptSchema.departmentRanks.permissions,
+                  rankLevel: deptSchema.departmentRanks.level,
+                })
+                .from(deptSchema.departmentMembers)
+                .leftJoin(
+                  deptSchema.departmentRanks,
+                  eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                )
+                .where(
+                  and(
+                    eq(deptSchema.departmentMembers.discordId, actorDiscordId),
+                    eq(deptSchema.departmentMembers.departmentId, targetMember.departmentId),
+                    eq(deptSchema.departmentMembers.isActive, true)
+                  )
+                )
+                .limit(1);
+              if (refreshed.length > 0) {
+                actorPermissions = refreshed[0]!.permissions;
+                actorRankLevel = refreshed[0]!.rankLevel ?? 0;
+              }
+            } catch (e) {
+              // continue; fall back to existing values
+            }
+          }
 
           const isEditingSelf = actorDiscordId === targetDiscordId;
           let finalUpdateData = { ...updateData };

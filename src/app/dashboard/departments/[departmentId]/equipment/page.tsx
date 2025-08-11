@@ -79,6 +79,9 @@ export default function EquipmentManagementPage() {
   const { data: memberships } = api.dept.discovery.getMyMemberships.useQuery();
   const currentUserMember = memberships?.find(m => m.departmentId === departmentId);
 
+  // Permissions
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ departmentId, permission: 'manage_members' });
+
   // Assign equipment mutation
   const assignEquipmentMutation = api.deptMore.equipment.assignEquipment.useMutation({
     onSuccess: (data) => {
@@ -204,6 +207,7 @@ export default function EquipmentManagementPage() {
             </div>
           </div>
 
+          {(canManageMembers?.hasPermission ?? false) ? (
           <Dialog open={isAssignDialogOpen} onOpenChange={setIsAssignDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -302,6 +306,11 @@ export default function EquipmentManagementPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          ) : (
+            <div className="text-sm text-muted-foreground">
+              You do not have permission to assign equipment.
+            </div>
+          )}
         </div>
 
         {/* Search and Filters */}
@@ -395,6 +404,7 @@ export default function EquipmentManagementPage() {
                             </p>
                           </div>
                         </div>
+                        {(canManageMembers?.hasPermission ?? false) ? (
                         <Button
                           variant="outline"
                           size="sm"
@@ -405,6 +415,9 @@ export default function EquipmentManagementPage() {
                         >
                           Return Equipment
                         </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No permission to return</span>
+                        )}
                       </div>
                     ) : (
                       <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">

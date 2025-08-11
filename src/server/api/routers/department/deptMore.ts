@@ -18,6 +18,7 @@ import {
     bulkUpdateMembers,
     searchMembersAdvanced,
     searchAnnouncements,
+    bulkPromoteMembers,
 } from "@/server/api/services/department";
 
 // Enhanced validation schemas
@@ -111,6 +112,11 @@ const advancedSearchSchema = z.object({
 });
 
 export const deptMoreRouter = createTRPCRouter({
+    // ===== PERMISSION HELPERS =====
+    // Helper procedure-less functions to check membership and permissions consistently
+    // Note: These are plain functions, used within routes below
+    
+    // ... routes continue below ...
     // ===== PERFORMANCE ANALYTICS =====
     analytics: createTRPCRouter({
         // Get department-wide analytics
@@ -121,6 +127,21 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .query(async ({ input, ctx }) => {
                 try {
+                    // Ensure requester is an active member of this department
+                    const requester = await postgrestDb
+                        .select({
+                            id: deptSchema.departmentMembers.id,
+                        })
+                        .from(deptSchema.departmentMembers)
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (requester.length === 0) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this department" });
+                    }
                     return await getDepartmentAnalytics(input.departmentId, input.timeframe);
                 } catch (error) {
                     throw new TRPCError({
@@ -145,7 +166,7 @@ export const deptMoreRouter = createTRPCRouter({
             }),
 
         // Generate comprehensive performance report
-        generateReport: adminProcedure
+        generateReport: protectedProcedure
             .input(z.object({
                 departmentId: z.number().int().positive(),
                 reportType: z.enum(["monthly", "quarterly", "annual", "custom"]),
@@ -155,6 +176,24 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .mutation(async ({ input, ctx }) => {
                 try {
+                    // Require manage_department or manage_members to generate reports
+                    const perm = await postgrestDb
+                        .select({ permissions: deptSchema.departmentRanks.permissions })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    const permissions = perm[0]?.permissions;
+                    if (!permissions?.manage_department && !permissions?.manage_members) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to generate reports" });
+                    }
                     return await generatePerformanceReport(input);
                 } catch (error) {
                     throw new TRPCError({
@@ -172,6 +211,24 @@ export const deptMoreRouter = createTRPCRouter({
             .input(shiftScheduleSchema)
             .mutation(async ({ input, ctx }) => {
                 try {
+                    // Require manage_members to schedule shifts in the department
+                    const perm = await postgrestDb
+                        .select({ permissions: deptSchema.departmentRanks.permissions })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    const permissions = perm[0]?.permissions;
+                    if (!permissions?.manage_members) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to schedule shifts" });
+                    }
                     return await scheduleShift(input);
                 } catch (error) {
                     throw new TRPCError({
@@ -191,6 +248,21 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .query(async ({ input, ctx }) => {
                 try {
+                    // Must be an active member of the queried department (if departmentId provided)
+                    if (input.departmentId) {
+                        const requester = await postgrestDb
+                            .select({ id: deptSchema.departmentMembers.id })
+                            .from(deptSchema.departmentMembers)
+                            .where(and(
+                                eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                                eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                                eq(deptSchema.departmentMembers.isActive, true)
+                            ))
+                            .limit(1);
+                        if (requester.length === 0) {
+                            throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this department" });
+                        }
+                    }
                     // Build where conditions
                     const conditions = [];
 
@@ -267,6 +339,19 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .query(async ({ input, ctx }) => {
                 try {
+                    // Membership required
+                    const requester = await postgrestDb
+                        .select({ id: deptSchema.departmentMembers.id })
+                        .from(deptSchema.departmentMembers)
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (requester.length === 0) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this department" });
+                    }
                     // Get all equipment for the department with assignment info
                     const equipment = await postgrestDb
                         .select({
@@ -366,7 +451,58 @@ export const deptMoreRouter = createTRPCRouter({
             .input(equipmentAssignmentSchema)
             .mutation(async ({ input, ctx }) => {
                 try {
-                    return await manageEquipment("assign", input);
+                    // Require manage_members for the department of the target member
+                    const memberRow = await postgrestDb
+                        .select({ departmentId: deptSchema.departmentMembers.departmentId })
+                        .from(deptSchema.departmentMembers)
+                        .where(eq(deptSchema.departmentMembers.id, input.memberId))
+                        .limit(1);
+                    if (memberRow.length === 0) {
+                        throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+                    }
+                    const departmentId = memberRow[0]!.departmentId;
+                    const perm = await postgrestDb
+                        .select({ permissions: deptSchema.departmentRanks.permissions })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (!perm[0]?.permissions?.manage_members) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to assign equipment" });
+                    }
+                    const assignResult = await manageEquipment("assign", input);
+                    // Audit log
+                    const actor = await postgrestDb
+                      .select({ id: deptSchema.departmentMembers.id })
+                      .from(deptSchema.departmentMembers)
+                      .where(and(
+                        eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                        eq(deptSchema.departmentMembers.departmentId, departmentId),
+                        eq(deptSchema.departmentMembers.isActive, true)
+                      ))
+                      .limit(1);
+                    const performedBy = actor[0]?.id ? String(ctx.dbUser.discordId) : "system";
+                    await postgrestDb.insert(deptSchema.departmentMemberAuditLogs).values({
+                      memberId: input.memberId,
+                      departmentId,
+                      actionType: 'equipment_assigned',
+                      reason: input.notes ?? null,
+                      details: {
+                        equipmentId: input.equipmentId,
+                        assignedDate: input.assignedDate,
+                        condition: input.condition,
+                        success: assignResult?.success ?? true,
+                      },
+                      performedBy,
+                    });
+                    return assignResult;
                 } catch (error) {
                     throw new TRPCError({
                         code: "INTERNAL_SERVER_ERROR",
@@ -384,7 +520,62 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .mutation(async ({ input, ctx }) => {
                 try {
-                    return await manageEquipment("return", input);
+                    // Require manage_members (look up assignment to derive department)
+                    const assignment = await postgrestDb
+                        .select({
+                            departmentId: deptSchema.departmentEquipment.departmentId,
+                        })
+                        .from(deptSchema.departmentEquipmentAssignments)
+                        .innerJoin(
+                            deptSchema.departmentEquipment,
+                            eq(deptSchema.departmentEquipmentAssignments.equipmentId, deptSchema.departmentEquipment.id)
+                        )
+                        .where(eq(deptSchema.departmentEquipmentAssignments.id, input.assignmentId))
+                        .limit(1);
+                    if (assignment.length === 0) {
+                        throw new TRPCError({ code: "NOT_FOUND", message: "Assignment not found" });
+                    }
+                    const perm = await postgrestDb
+                        .select({ permissions: deptSchema.departmentRanks.permissions })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, assignment[0]!.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (!perm[0]?.permissions?.manage_members) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to return equipment" });
+                    }
+                    const returnResult = await manageEquipment("return", input);
+                    // Fetch assignment/member for audit
+                    const assignmentInfo = await postgrestDb
+                      .select({
+                        memberId: deptSchema.departmentEquipmentAssignments.memberId,
+                        equipmentId: deptSchema.departmentEquipmentAssignments.equipmentId,
+                      })
+                      .from(deptSchema.departmentEquipmentAssignments)
+                      .where(eq(deptSchema.departmentEquipmentAssignments.id, input.assignmentId))
+                      .limit(1);
+                    const memberId = assignmentInfo[0]?.memberId;
+                    await postgrestDb.insert(deptSchema.departmentMemberAuditLogs).values({
+                      memberId: memberId ?? 0,
+                      departmentId: assignment[0]!.departmentId,
+                      actionType: 'equipment_returned',
+                      reason: input.returnNotes ?? null,
+                      details: {
+                        equipmentId: assignmentInfo[0]?.equipmentId ?? null,
+                        assignmentId: input.assignmentId,
+                        returnCondition: input.returnCondition,
+                        success: returnResult?.success ?? true,
+                      },
+                      performedBy: String(ctx.dbUser.discordId),
+                    });
+                    return returnResult;
                 } catch (error) {
                     throw new TRPCError({
                         code: "INTERNAL_SERVER_ERROR",
@@ -401,6 +592,20 @@ export const deptMoreRouter = createTRPCRouter({
             .input(incidentReportSchema)
             .mutation(async ({ input, ctx }) => {
                 try {
+                    // Ensure the actor is the reporting member and active in department
+                    const actorMember = await postgrestDb
+                        .select({ id: deptSchema.departmentMembers.id })
+                        .from(deptSchema.departmentMembers)
+                        .where(and(
+                            eq(deptSchema.departmentMembers.id, input.reportingMemberId),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (actorMember.length === 0) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You can only file reports for yourself in this department" });
+                    }
                     return await createIncidentReport(input);
                 } catch (error) {
                     throw new TRPCError({
@@ -422,6 +627,19 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .query(async ({ input, ctx }) => {
                 try {
+                    // Membership required
+                    const requester = await postgrestDb
+                        .select({ id: deptSchema.departmentMembers.id })
+                        .from(deptSchema.departmentMembers)
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (requester.length === 0) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this department" });
+                    }
                     // Build where conditions
                     const conditions = [
                         eq(deptSchema.departmentIncidents.departmentId, input.departmentId),
@@ -525,7 +743,36 @@ export const deptMoreRouter = createTRPCRouter({
             .input(performanceReviewSchema)
             .mutation(async ({ input, ctx }) => {
                 try {
-                    return await conductPerformanceReview(input);
+                    // Require manage_members in the department of the member being reviewed
+                    const memberDept = await postgrestDb
+                        .select({ departmentId: deptSchema.departmentMembers.departmentId })
+                        .from(deptSchema.departmentMembers)
+                        .where(eq(deptSchema.departmentMembers.id, input.memberId))
+                        .limit(1);
+                    if (memberDept.length === 0) {
+                        throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+                    }
+                    const departmentId = memberDept[0]!.departmentId;
+                    const perm = await postgrestDb
+                        .select({ permissions: deptSchema.departmentRanks.permissions, id: deptSchema.departmentMembers.id })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    const permissions = perm[0]?.permissions;
+                    if (!permissions?.manage_members) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to conduct reviews" });
+                    }
+                    // Reviewer must be the actor's member id
+                    const reviewerId = perm[0]!.id;
+                    return await conductPerformanceReview({ ...input, reviewerId });
                 } catch (error) {
                     throw new TRPCError({
                         code: "INTERNAL_SERVER_ERROR",
@@ -544,6 +791,21 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .query(async ({ input, ctx }) => {
                 try {
+                    // Must be a member of the department to view reviews (if department scope provided)
+                    if (input.departmentId) {
+                        const requester = await postgrestDb
+                            .select({ id: deptSchema.departmentMembers.id })
+                            .from(deptSchema.departmentMembers)
+                            .where(and(
+                                eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                                eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                                eq(deptSchema.departmentMembers.isActive, true)
+                            ))
+                            .limit(1);
+                        if (requester.length === 0) {
+                            throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this department" });
+                        }
+                    }
                     // Build the where conditions
                     const whereConditions = [];
 
@@ -666,12 +928,31 @@ export const deptMoreRouter = createTRPCRouter({
             .input(announcementSchema)
             .mutation(async ({ input, ctx }) => {
                 try {
-                    // Get the author ID from the authenticated user context
-                    const authorId = parseInt(ctx.session.user.id); // Assuming user ID is available in session
-
+                    // Require manage_members to send announcements
+                    const perm = await postgrestDb
+                        .select({ id: deptSchema.departmentMembers.id, permissions: deptSchema.departmentRanks.permissions })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    const permissions = perm[0]?.permissions;
+                    const authorMemberId = perm[0]?.id;
+                    if (!authorMemberId) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this department" });
+                    }
+                    if (!permissions?.manage_members && !permissions?.manage_department) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to send announcements" });
+                    }
                     return await sendDepartmentAnnouncement({
                         ...input,
-                        authorId,
+                        authorId: authorMemberId,
                     });
                 } catch (error) {
                     throw new TRPCError({
@@ -690,6 +971,19 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .query(async ({ input, ctx }) => {
                 try {
+                    // Membership required
+                    const requester = await postgrestDb
+                        .select({ id: deptSchema.departmentMembers.id })
+                        .from(deptSchema.departmentMembers)
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (requester.length === 0) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You are not a member of this department" });
+                    }
                     console.log("Getting announcements for department:", input.departmentId);
                     
                     // Get announcements using the search service
@@ -789,11 +1083,63 @@ export const deptMoreRouter = createTRPCRouter({
     // ===== BULK OPERATIONS =====
     bulk: createTRPCRouter({
         // Bulk update members
-        updateMembers: adminProcedure
+        updateMembers: protectedProcedure
             .input(bulkUpdateSchema)
             .mutation(async ({ input, ctx }) => {
                 try {
-                    return await bulkUpdateMembers(input);
+                    // Require manage_members in the department context of all members
+                    // Determine a set of departments involved
+                    const targets = await postgrestDb
+                        .select({ departmentId: deptSchema.departmentMembers.departmentId })
+                        .from(deptSchema.departmentMembers)
+                        .where(inArray(deptSchema.departmentMembers.id, input.memberIds));
+                    const uniqueDeptIds = Array.from(new Set(targets.map(t => t.departmentId)));
+                    if (uniqueDeptIds.length !== 1) {
+                        throw new TRPCError({ code: "BAD_REQUEST", message: "All members in a bulk update must belong to the same department" });
+                    }
+                    const departmentId = uniqueDeptIds[0]!;
+                    const perm = await postgrestDb
+                        .select({ permissions: deptSchema.departmentRanks.permissions })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (!perm[0]?.permissions?.manage_members) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to bulk update members" });
+                    }
+                    const actor = await postgrestDb
+                      .select({ id: deptSchema.departmentMembers.id })
+                      .from(deptSchema.departmentMembers)
+                      .where(and(
+                        eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                        eq(deptSchema.departmentMembers.departmentId, departmentId),
+                        eq(deptSchema.departmentMembers.isActive, true)
+                      ))
+                      .limit(1);
+                    const performedBy = String(ctx.dbUser.discordId);
+                    const result = await bulkUpdateMembers({ ...input, performedBy: actor[0]?.id });
+                    // Audit each successful update
+                    const auditValues = result.results
+                      .filter(r => r.success)
+                      .map(r => ({
+                        memberId: r.memberId,
+                        departmentId,
+                        actionType: 'bulk_member_update',
+                        reason: input.reason,
+                        details: r.data ?? { updated: true },
+                        performedBy,
+                      }));
+                    if (auditValues.length > 0) {
+                      await postgrestDb.insert(deptSchema.departmentMemberAuditLogs).values(auditValues);
+                    }
+                    return result;
                 } catch (error) {
                     throw new TRPCError({
                         code: "INTERNAL_SERVER_ERROR",
@@ -803,7 +1149,7 @@ export const deptMoreRouter = createTRPCRouter({
             }),
 
         // Bulk promote members
-        promoteMembers: adminProcedure
+        promoteMembers: protectedProcedure
             .input(z.object({
                 memberIds: z.array(z.number().int().positive()).min(1),
                 newRankId: z.number().int().positive(),
@@ -812,8 +1158,65 @@ export const deptMoreRouter = createTRPCRouter({
             }))
             .mutation(async ({ input, ctx }) => {
                 try {
-                    // Implementation would handle bulk promotions
-                    return { success: true, updatedCount: input.memberIds.length };
+                    // Require manage_members in the single department context
+                    const targets = await postgrestDb
+                        .select({ departmentId: deptSchema.departmentMembers.departmentId })
+                        .from(deptSchema.departmentMembers)
+                        .where(inArray(deptSchema.departmentMembers.id, input.memberIds));
+                    const uniqueDeptIds = Array.from(new Set(targets.map(t => t.departmentId)));
+                    if (uniqueDeptIds.length !== 1) {
+                        throw new TRPCError({ code: "BAD_REQUEST", message: "All members in a bulk promotion must belong to the same department" });
+                    }
+                    const departmentId = uniqueDeptIds[0]!;
+                    const perm = await postgrestDb
+                        .select({ permissions: deptSchema.departmentRanks.permissions })
+                        .from(deptSchema.departmentMembers)
+                        .leftJoin(
+                            deptSchema.departmentRanks,
+                            eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+                        )
+                        .where(and(
+                            eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                            eq(deptSchema.departmentMembers.departmentId, departmentId),
+                            eq(deptSchema.departmentMembers.isActive, true)
+                        ))
+                        .limit(1);
+                    if (!perm[0]?.permissions?.manage_members) {
+                        throw new TRPCError({ code: "FORBIDDEN", message: "You do not have permission to bulk promote members" });
+                    }
+                    // Execute real bulk promotions
+                    const actorMember = await postgrestDb
+                      .select({ id: deptSchema.departmentMembers.id })
+                      .from(deptSchema.departmentMembers)
+                      .where(and(
+                        eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                        eq(deptSchema.departmentMembers.departmentId, departmentId),
+                        eq(deptSchema.departmentMembers.isActive, true)
+                      ))
+                      .limit(1);
+                    const performedBy = actorMember[0]?.id;
+                    const result = await bulkPromoteMembers({
+                      memberIds: input.memberIds,
+                      newRankId: input.newRankId,
+                      reason: input.reason,
+                      effectiveDate: input.effectiveDate,
+                      performedBy,
+                    });
+                    // Audit each successful promotion
+                    const auditValues = result.results
+                      .filter(r => r.success)
+                      .map(r => ({
+                        memberId: r.memberId,
+                        departmentId,
+                        actionType: 'bulk_member_promote',
+                        reason: input.reason,
+                        details: r.data ?? { promoted: true, toRankId: input.newRankId },
+                        performedBy: String(ctx.dbUser.discordId),
+                      }));
+                    if (auditValues.length > 0) {
+                      await postgrestDb.insert(deptSchema.departmentMemberAuditLogs).values(auditValues);
+                    }
+                    return { success: result.success, updatedCount: result.successCount, summary: result.summary, results: result.results };
                 } catch (error) {
                     throw new TRPCError({
                         code: "INTERNAL_SERVER_ERROR",

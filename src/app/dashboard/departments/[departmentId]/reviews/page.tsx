@@ -94,6 +94,9 @@ export default function PerformanceReviewsPage() {
   const { data: memberships } = api.dept.discovery.getMyMemberships.useQuery();
   const currentUserMember = memberships?.find(m => m.departmentId === departmentId);
 
+  // Permissions
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ departmentId, permission: 'manage_members' });
+
   // Get performance reviews
   const { data: reviews, isLoading: reviewsLoading, refetch: refetchReviews } =
     api.deptMore.reviews.getReviews.useQuery({
@@ -216,6 +219,7 @@ export default function PerformanceReviewsPage() {
             </div>
           </div>
 
+          {(canManageMembers?.hasPermission ?? false) ? (
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -357,6 +361,9 @@ export default function PerformanceReviewsPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          ) : (
+            <div className="text-sm text-muted-foreground">You do not have permission to conduct reviews.</div>
+          )}
         </div>
 
         {/* Search */}

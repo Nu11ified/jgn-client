@@ -86,6 +86,9 @@ export default function AdvancedOperationsPage() {
   // Get department data for ranks and teams
   const { data: departmentData } = api.dept.user.info.getDepartment.useQuery({ departmentId });
 
+  // Permissions
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ departmentId, permission: 'manage_members' });
+
   // Advanced search query
   const { data: searchResults, isLoading: searchLoading, refetch: refetchSearch } =
     api.deptMore.search.searchMembers.useQuery({
@@ -256,7 +259,7 @@ export default function AdvancedOperationsPage() {
               <>
                 <Dialog open={isBulkUpdateDialogOpen} onOpenChange={setIsBulkUpdateDialogOpen}>
                   <DialogTrigger asChild>
-                    <Button variant="outline">
+                    <Button variant="outline" disabled={!(canManageMembers?.hasPermission ?? false)} title={!(canManageMembers?.hasPermission ?? false) ? 'Requires manage members permission' : undefined}>
                       <Edit className="h-4 w-4 mr-2" />
                       Bulk Update ({selectedMembers.length})
                     </Button>
@@ -377,7 +380,7 @@ export default function AdvancedOperationsPage() {
 
                 <Dialog open={isBulkPromoteDialogOpen} onOpenChange={setIsBulkPromoteDialogOpen}>
                   <DialogTrigger asChild>
-                    <Button>
+                    <Button disabled={!(canManageMembers?.hasPermission ?? false)} title={!(canManageMembers?.hasPermission ?? false) ? 'Requires manage members permission' : undefined}>
                       <Target className="h-4 w-4 mr-2" />
                       Bulk Promote ({selectedMembers.length})
                     </Button>

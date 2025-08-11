@@ -92,6 +92,9 @@ export default function IncidentReportsPage() {
   const { data: memberships } = api.dept.discovery.getMyMemberships.useQuery();
   const currentUserMember = memberships?.find(m => m.departmentId === departmentId);
 
+  // Permissions (optional future moderation)
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ departmentId, permission: 'manage_members' });
+
   // Get incident reports
   const { data: incidentReports, isLoading: reportsLoading, refetch: refetchReports } =
     api.deptMore.incidents.getReports.useQuery({

@@ -102,6 +102,8 @@ export default function MemberDetailsPage() {
   });
 
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isRemoveDialogOpen, setIsRemoveDialogOpen] = useState(false);
+  const [removeReason, setRemoveReason] = useState("");
 
   // Add state for notes editing
   const [notesState, setNotesState] = useState<{
@@ -207,6 +209,12 @@ export default function MemberDetailsPage() {
     },
     { enabled: !!memberData && !!(permissions?.hasPermission ?? false) }
   );
+
+  // Get member audit logs (limited)
+  const { data: auditLogs, isLoading: auditLoading } = api.dept.user.info.getMemberAuditLogs.useQuery({
+    memberId,
+    limit: 25,
+  }, { enabled: !!memberData && !!(permissions?.hasPermission ?? false) });
 
   // Individual permission checks
   const canPromote = promotePermission?.hasPermission ?? false;
@@ -341,6 +349,17 @@ export default function MemberDetailsPage() {
     }
   });
 
+  const removeMemberMutation = api.dept.user.members.remove.useMutation({
+    onSuccess: () => {
+      showQuickSuccess("Member removed from department");
+      router.push(`/dashboard/departments/${departmentId}/roster`);
+    },
+    onError: (error) => {
+      showQuickError(`Failed to remove member: ${error.message}`);
+      setIsRemoveDialogOpen(false);
+    },
+  });
+
   // Add state for LOA dialog
   const [loaDialog, setLoaDialog] = useState<{
     isOpen: boolean;
@@ -422,6 +441,14 @@ export default function MemberDetailsPage() {
     deleteMemberMutation.mutate({
       departmentId: departmentId,
       memberId: memberData.id,
+    });
+  };
+
+  const handleRemoveMember = () => {
+    if (!memberData) return;
+    removeMemberMutation.mutate({
+      memberId: memberData.id,
+      reason: removeReason || undefined,
     });
   };
 
@@ -1156,10 +1183,11 @@ export default function MemberDetailsPage() {
                       {/* Performance Details Tabs */}
                       <div>
                         <Tabs defaultValue="overview" className="w-full">
-                          <TabsList className="grid w-full grid-cols-3">
+                          <TabsList className="grid w-full grid-cols-4">
                             <TabsTrigger value="overview">Overview</TabsTrigger>
                             <TabsTrigger value="promotions">Promotions</TabsTrigger>
                             <TabsTrigger value="disciplinary">Records</TabsTrigger>
+                            <TabsTrigger value="audit">Audit</TabsTrigger>
                           </TabsList>
 
                           <TabsContent value="overview" className="space-y-4 mt-6">
@@ -1329,6 +1357,51 @@ export default function MemberDetailsPage() {
                               </div>
                             )}
                           </TabsContent>
+
+                          <TabsContent value="audit" className="space-y-4 mt-6">
+                            {auditLoading ? (
+                              <div className="space-y-2">
+                                {Array.from({ length: 3 }, (_, i) => (
+                                  <Skeleton key={i} className="h-16 w-full" />
+                                ))}
+                              </div>
+                            ) : (!auditLogs || auditLogs.length === 0) ? (
+                              <div className="text-center py-8 text-muted-foreground">
+                                <Info className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                                <p>No audit entries found</p>
+                              </div>
+                            ) : (
+                              <div className="space-y-3">
+                                {auditLogs.map((log) => (
+                                  <div key={log.id} className="flex items-start gap-3 p-3 bg-muted rounded-lg">
+                                    <div className="flex-1">
+                                      <div className="flex items-center justify-between">
+                                        <div className="text-sm font-medium capitalize">{log.actionType.replace(/_/g, ' ')}</div>
+                                        <div className="text-xs text-muted-foreground">{formatLocalDateTime(log.createdAt)}</div>
+                                      </div>
+                                      {log.reason && (
+                                        <div className="text-sm mt-1"><strong>Reason:</strong> {log.reason}</div>
+                                      )}
+                                      {typeof log.details !== 'undefined' && (
+                                        <div className="text-xs text-muted-foreground mt-1">
+                                          {(() => {
+                                            try {
+                                              return typeof log.details === 'string'
+                                                ? log.details
+                                                : JSON.stringify(log.details);
+                                            } catch {
+                                              return String(log.details);
+                                            }
+                                          })()}
+                                        </div>
+                                      )}
+                                      <div className="text-xs text-muted-foreground mt-1">By: {log.performedBy}</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </TabsContent>
                         </Tabs>
                       </div>
                     </CardContent>
@@ -1494,6 +1567,17 @@ export default function MemberDetailsPage() {
                                     Remove Rank
                                   </Button>
                                 )}
+
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  className="justify-start"
+                                  disabled={removeMemberMutation.isPending}
+                                  onClick={() => setIsRemoveDialogOpen(true)}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  {removeMemberMutation.isPending ? "Removing..." : "Remove from Department"}
+                                </Button>
 
                                 {canDiscipline && (
                                   <>
@@ -1760,6 +1844,44 @@ export default function MemberDetailsPage() {
                         </Button>
                     </DialogFooter>
                 </DialogContent>
+            </Dialog>
+
+            {/* Remove Member Confirmation Dialog (soft removal, preserves history) */}
+            <Dialog open={isRemoveDialogOpen} onOpenChange={setIsRemoveDialogOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Remove from Department</DialogTitle>
+                  <DialogDescription>
+                    This will remove {memberData?.roleplayName ?? 'this member'} from the department, remove their Discord roles, and clear their rank, callsign, and team so they no longer appear on the roster. Their historical records (promotions, disciplinary, timeclock) will be preserved for future reference.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium mb-1">Reason (optional)</label>
+                  <Textarea
+                    value={removeReason}
+                    onChange={(e) => setRemoveReason(e.target.value)}
+                    placeholder="Enter a reason for removal..."
+                    rows={3}
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsRemoveDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleRemoveMember}
+                    disabled={removeMemberMutation.isPending}
+                  >
+                    {removeMemberMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Removing...
+                      </>
+                    ) : 'Remove Member'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
             </Dialog>
           </>
         )}

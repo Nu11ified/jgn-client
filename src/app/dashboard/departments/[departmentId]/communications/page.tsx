@@ -86,6 +86,9 @@ export default function CommunicationsPage() {
   // Get department ranks and teams for targeting
   const { data: departmentData } = api.dept.user.info.getDepartment.useQuery({ departmentId });
 
+  // Permissions
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ departmentId, permission: 'manage_members' });
+
   // Get current user's member info for this department
   const { data: memberships } = api.dept.discovery.getMyMemberships.useQuery();
   const currentUserMember = memberships?.find(m => m.departmentId === departmentId);
@@ -227,6 +230,7 @@ const announcementsData = announcements || [] as Announcement[];
             </div>
           </div>
 
+          {(canManageMembers?.hasPermission ?? false) ? (
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -410,6 +414,9 @@ const announcementsData = announcements || [] as Announcement[];
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          ) : (
+            <div className="text-sm text-muted-foreground">You do not have permission to send announcements.</div>
+          )}
         </div>
 
         {/* Search and Filters */}

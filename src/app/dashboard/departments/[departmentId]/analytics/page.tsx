@@ -48,6 +48,10 @@ export default function DepartmentAnalyticsPage() {
       timeframe,
     });
 
+  // Permissions for generating reports
+  const { data: canManageMembers } = api.dept.user.checkPermission.useQuery({ departmentId, permission: 'manage_members' });
+  const { data: canManageDepartment } = api.dept.user.checkPermission.useQuery({ departmentId, permission: 'manage_department' });
+
   // Generate report mutation
   const generateReportMutation = api.deptMore.analytics.generateReport.useMutation({
     onSuccess: (data) => {
@@ -123,6 +127,7 @@ export default function DepartmentAnalyticsPage() {
               </SelectContent>
             </Select>
             
+            {(canManageMembers?.hasPermission || canManageDepartment?.hasPermission) ? (
             <Button 
               onClick={handleGenerateReport}
               disabled={generateReportMutation.isPending}
@@ -130,6 +135,9 @@ export default function DepartmentAnalyticsPage() {
               <Download className="h-4 w-4 mr-2" />
               {generateReportMutation.isPending ? "Generating..." : "Generate Report"}
             </Button>
+            ) : (
+              <div className="text-sm text-muted-foreground">You do not have permission to generate reports.</div>
+            )}
           </div>
         </div>
 

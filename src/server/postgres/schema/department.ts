@@ -638,6 +638,30 @@ export const departmentDisciplinaryActions = createDepartmentTable(
   ]
 );
 
+// Table for generic member audit/activity logs
+export const departmentMemberAuditLogs = createDepartmentTable(
+  "member_audit_logs",
+  (d) => ({
+    id: d.integer().primaryKey().generatedByDefaultAsIdentity(),
+    memberId: d.integer("member_id").references(() => departmentMembers.id, { onDelete: "cascade" }).notNull(),
+    departmentId: d.integer("department_id").references(() => departments.id, { onDelete: "cascade" }).notNull(),
+    actionType: d.varchar("action_type", { length: 50 }).notNull(), // e.g., removed_from_department, added_to_department
+    reason: d.text("reason"),
+    details: d.jsonb("details"), // Optional structured payload
+    performedBy: d.text("performed_by").notNull(), // Discord ID of actor
+    createdAt: d
+      .timestamp("created_at", { withTimezone: true })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  }),
+  (t) => [
+    index("member_audit_member_idx").on(t.memberId),
+    index("member_audit_dept_idx").on(t.departmentId),
+    index("member_audit_action_idx").on(t.actionType),
+    index("member_audit_actor_idx").on(t.performedBy),
+  ]
+);
+
 // Table for Certifications within Departments
 export const departmentCertifications = createDepartmentTable(
   "certifications",

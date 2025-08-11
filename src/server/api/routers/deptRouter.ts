@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, desc, asc, isNull, isNotNull, sql, inArray, gt, gte, lt, lte, ne } from "drizzle-orm";
+import { eq, and, or, not, desc, asc, isNull, isNotNull, sql, inArray, gt, gte, lt, lte, ne } from "drizzle-orm";
 import { adminProcedure, protectedProcedure, publicProcedure, createTRPCRouter } from "@/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { postgrestDb } from "@/server/postgres";
@@ -3954,6 +3954,160 @@ export const deptRouter = createTRPCRouter({
           return updatedMemberResult;
 
         }),
+
+      // Remove a member from the department (user-scoped for managers)
+      remove: protectedProcedure
+        .input(
+          z.object({
+            memberId: z.number().int().positive(),
+            reason: z.string().optional(),
+          })
+        )
+        .mutation(async ({ ctx, input }) => {
+          try {
+            const actorDiscordId = String(ctx.dbUser.discordId);
+
+            // 1. Load target member with department context
+            const targetMemberRows = await postgrestDb
+              .select({
+                id: deptSchema.departmentMembers.id,
+                discordId: deptSchema.departmentMembers.discordId,
+                departmentId: deptSchema.departmentMembers.departmentId,
+                rankLevel: deptSchema.departmentRanks.level,
+                departmentIdNumber: deptSchema.departmentMembers.departmentIdNumber,
+                isActive: deptSchema.departmentMembers.isActive,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
+
+            if (targetMemberRows.length === 0) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Member not found." });
+            }
+            const targetMember = targetMemberRows[0]!;
+
+            // 2. Fetch actor membership in same department and check permission
+            const actorRows = await postgrestDb
+              .select({
+                rankLevel: deptSchema.departmentRanks.level,
+                permissions: deptSchema.departmentRanks.permissions,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.discordId, actorDiscordId),
+                  eq(deptSchema.departmentMembers.departmentId, targetMember.departmentId),
+                  eq(deptSchema.departmentMembers.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (actorRows.length === 0) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You are not an active member of this department.",
+              });
+            }
+
+            const actor = actorRows[0]!;
+            if (!actor.permissions?.manage_members) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You do not have permission to remove members in this department.",
+              });
+            }
+
+            // 3. Rank hierarchy check (prevents self and equal/higher)
+            assertCanActOnMember({
+              actorDiscordId,
+              actorRankLevel: actor.rankLevel,
+              targetDiscordId: targetMember.discordId,
+              targetRankLevel: targetMember.rankLevel,
+              actionName: "remove a member",
+            });
+
+            // 4. Remove Discord roles
+            const roleRemoval = await removeDiscordRolesForInactiveMember(
+              targetMember.discordId,
+              targetMember.departmentId
+            );
+            if (!roleRemoval.success) {
+              console.warn(
+                `⚠️ Failed to remove Discord roles for ${targetMember.discordId} in department ${targetMember.departmentId}: ${roleRemoval.message}`
+              );
+            }
+
+            // 5. Free up department ID number, if any
+            if (targetMember.departmentIdNumber != null) {
+              await postgrestDb
+                .update(deptSchema.departmentIdNumbers)
+                .set({ isAvailable: true, currentMemberId: null })
+                .where(
+                  and(
+                    eq(deptSchema.departmentIdNumbers.departmentId, targetMember.departmentId),
+                    eq(deptSchema.departmentIdNumbers.idNumber, targetMember.departmentIdNumber)
+                  )
+                );
+            }
+
+            // 6. Soft remove from department: hide from roster and clear sensitive assignment fields
+            const updateResult = await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({
+                isActive: false,
+                status: "inactive",
+                rankId: null,
+                primaryTeamId: null,
+                callsign: null,
+                lastActiveDate: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(deptSchema.departmentMembers.id, targetMember.id))
+              .returning();
+
+            if (updateResult.length === 0) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "Failed to remove member from department.",
+              });
+            }
+
+            // 7. Write audit log
+            await postgrestDb.insert(deptSchema.departmentMemberAuditLogs).values({
+              memberId: targetMember.id,
+              departmentId: targetMember.departmentId,
+              actionType: 'removed_from_department',
+              reason: input.reason ?? null,
+              details: {
+                freedDepartmentIdNumber: targetMember.departmentIdNumber ?? null,
+                roleRemovalSuccess: roleRemoval.success,
+              },
+              performedBy: actorDiscordId,
+            });
+
+            return {
+              success: true,
+              message: "Member removed from department. Roles removed and roster updated.",
+              memberId: targetMember.id,
+              departmentId: targetMember.departmentId,
+            };
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            console.error("Failed to remove member:", error);
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to remove member.",
+            });
+          }
+        }),
     }),
 
     // ===== PROMOTION/DEMOTION SYSTEM =====
@@ -5468,6 +5622,67 @@ export const deptRouter = createTRPCRouter({
 
     // ===== DEPARTMENT INFO AND MEMBERS =====
     info: createTRPCRouter({
+      // Member audit logs
+      getMemberAuditLogs: protectedProcedure
+        .input(z.object({
+          memberId: z.number().int().positive(),
+          limit: z.number().int().min(1).max(100).default(25),
+          actionType: z.string().optional(),
+        }))
+        .query(async ({ ctx, input }) => {
+          try {
+            // Ensure requester has access to this member's department
+            const target = await postgrestDb
+              .select({ departmentId: deptSchema.departmentMembers.departmentId })
+              .from(deptSchema.departmentMembers)
+              .where(eq(deptSchema.departmentMembers.id, input.memberId))
+              .limit(1);
+            if (target.length === 0) {
+              throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
+            }
+            const deptId = target[0]!.departmentId;
+
+            const requester = await postgrestDb
+              .select({ id: deptSchema.departmentMembers.id })
+              .from(deptSchema.departmentMembers)
+              .where(and(
+                eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                eq(deptSchema.departmentMembers.departmentId, deptId),
+                eq(deptSchema.departmentMembers.isActive, true)
+              ))
+              .limit(1);
+            if (requester.length === 0) {
+              throw new TRPCError({ code: 'FORBIDDEN', message: 'Not a member of this department' });
+            }
+
+            const conditions = [
+              eq(deptSchema.departmentMemberAuditLogs.memberId, input.memberId),
+              eq(deptSchema.departmentMemberAuditLogs.departmentId, deptId),
+            ];
+            if (input.actionType) {
+              conditions.push(eq(deptSchema.departmentMemberAuditLogs.actionType, input.actionType));
+            }
+
+            const logs = await postgrestDb
+              .select({
+                id: deptSchema.departmentMemberAuditLogs.id,
+                actionType: deptSchema.departmentMemberAuditLogs.actionType,
+                reason: deptSchema.departmentMemberAuditLogs.reason,
+                details: deptSchema.departmentMemberAuditLogs.details,
+                performedBy: deptSchema.departmentMemberAuditLogs.performedBy,
+                createdAt: deptSchema.departmentMemberAuditLogs.createdAt,
+              })
+              .from(deptSchema.departmentMemberAuditLogs)
+              .where(and(...conditions))
+              .orderBy(desc(deptSchema.departmentMemberAuditLogs.createdAt))
+              .limit(input.limit);
+
+            return logs;
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch audit logs' });
+          }
+        }),
       // Update my roleplay name
       updateMyRoleplayName: protectedProcedure
         .input(z.object({
@@ -5750,6 +5965,7 @@ export const deptRouter = createTRPCRouter({
           includeInactive: z.boolean().default(false),
           statusFilter: z.array(deptSchema.departmentMemberStatusEnum).optional(),
           rankFilter: z.array(z.number().int().positive()).optional(),
+          excludeRankIds: z.array(z.number().int().positive()).optional(),
           teamFilter: z.array(z.number().int().positive()).optional(),
           // Add member ID filter for finding specific members
           memberIdFilter: z.number().int().positive().optional(),
@@ -5819,6 +6035,11 @@ export const deptRouter = createTRPCRouter({
             // Rank filter
             if (input.rankFilter && input.rankFilter.length > 0) {
               conditions.push(inArray(deptSchema.departmentMembers.rankId, input.rankFilter));
+            }
+
+            // Exclude ranks
+            if (input.excludeRankIds && input.excludeRankIds.length > 0) {
+              conditions.push(not(inArray(deptSchema.departmentMembers.rankId, input.excludeRankIds)));
             }
 
             // Team filter - if user can only view team members, restrict to their teams
@@ -5935,6 +6156,40 @@ export const deptRouter = createTRPCRouter({
               hasMore = members.length === input.limit;
             }
 
+            // Compute facet counts for the current filter context (ignoring pagination)
+            const facetConditionsBase = [eq(deptSchema.departmentMembers.departmentId, input.departmentId)];
+            if (!input.includeInactive) facetConditionsBase.push(eq(deptSchema.departmentMembers.isActive, true));
+            if (input.statusFilter && input.statusFilter.length > 0) facetConditionsBase.push(inArray(deptSchema.departmentMembers.status, input.statusFilter));
+            if (input.rankFilter && input.rankFilter.length > 0) facetConditionsBase.push(inArray(deptSchema.departmentMembers.rankId, input.rankFilter));
+            if (input.excludeRankIds && input.excludeRankIds.length > 0) facetConditionsBase.push(not(inArray(deptSchema.departmentMembers.rankId, input.excludeRankIds)));
+            if (!permissions.view_all_members) {
+              if (input.teamFilter && input.teamFilter.length > 0) {
+                facetConditionsBase.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+              } else if (requester[0]!.primaryTeamId !== null) {
+                facetConditionsBase.push(eq(deptSchema.departmentMembers.primaryTeamId, requester[0]!.primaryTeamId));
+              } else {
+                facetConditionsBase.push(sql`FALSE`);
+              }
+            } else if (input.teamFilter && input.teamFilter.length > 0) {
+              facetConditionsBase.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+            }
+
+            const [allCountRes, activeCountRes, loaCountRes, inactiveCountRes, suspendedCountRes] = await Promise.all([
+              postgrestDb.select({ count: sql`count(*)` }).from(deptSchema.departmentMembers).where(and(...facetConditionsBase)),
+              postgrestDb.select({ count: sql`count(*)` }).from(deptSchema.departmentMembers).where(and(...facetConditionsBase, eq(deptSchema.departmentMembers.status, 'active'))),
+              postgrestDb.select({ count: sql`count(*)` }).from(deptSchema.departmentMembers).where(and(...facetConditionsBase, eq(deptSchema.departmentMembers.status, 'leave_of_absence'))),
+              postgrestDb.select({ count: sql`count(*)` }).from(deptSchema.departmentMembers).where(and(...facetConditionsBase, eq(deptSchema.departmentMembers.status, 'inactive'))),
+              postgrestDb.select({ count: sql`count(*)` }).from(deptSchema.departmentMembers).where(and(...facetConditionsBase, eq(deptSchema.departmentMembers.status, 'suspended'))),
+            ]);
+
+            const facets = {
+              total: Number(allCountRes[0]?.count ?? 0),
+              active: Number(activeCountRes[0]?.count ?? 0),
+              leave_of_absence: Number(loaCountRes[0]?.count ?? 0),
+              inactive: Number(inactiveCountRes[0]?.count ?? 0),
+              suspended: Number(suspendedCountRes[0]?.count ?? 0),
+            } as const;
+
             // Calculate next cursor for infinite pagination
             const nextCursor = hasMore && members.length > 0
               ? members[members.length - 1]?.id
@@ -5946,6 +6201,7 @@ export const deptRouter = createTRPCRouter({
               hasMore,
               nextCursor, // For infinite pagination
               userPermissions: permissions,
+              facets,
             };
           } catch (error) {
             if (error instanceof TRPCError) throw error;

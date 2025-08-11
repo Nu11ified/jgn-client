@@ -69,39 +69,40 @@ export const updateUserRankFromDiscordRoles = async (
             isNotNull(deptSchema.departmentRanks.discordRoleId)
           )
         )
-        .orderBy(asc(deptSchema.departmentRanks.level)); // Lowest level first
+        .orderBy(asc(deptSchema.departmentRanks.level)); // Order ascending; we'll select the highest match explicitly
 
       console.log(`📊 Found ${departmentRanks.length} active ranks with Discord roles for department ${membership.departmentId}`);
 
-      // Find the lowest rank the user has based on their Discord roles
+      // Find the highest rank the user has based on their Discord roles
       let newRankId: number | null = null;
-      let lowestRankFound: { id: number; name: string; level: number; } | null = null;
-      
+      let highestRankFound: { id: number; name: string; level: number; } | null = null;
+
       for (const rank of departmentRanks) {
         if (!rank.discordRoleId) continue;
-        
+
         const hasRole = userRoles.some(
           userRole => userRole.roleId === rank.discordRoleId && userRole.serverId === membership.discordGuildId
         );
-        
+
         console.log(`🎭 Checking rank "${rank.name}" (Level ${rank.level}, Role: ${rank.discordRoleId}): ${hasRole ? 'HAS ROLE' : 'NO ROLE'}`);
-        
+
         if (hasRole) {
-          newRankId = rank.id;
-          lowestRankFound = { id: rank.id, name: rank.name, level: rank.level };
-          break; // Take the lowest level rank they have
+          if (!highestRankFound || rank.level > highestRankFound.level) {
+            newRankId = rank.id;
+            highestRankFound = { id: rank.id, name: rank.name, level: rank.level };
+          }
         }
 
         if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING && !hasRole) {
           const userRolesInGuild = userRoles.filter(r => r.serverId === membership.discordGuildId);
-          console.log(`   👀 User has ${userRolesInGuild.length} roles in guild ${membership.discordGuildId}:`, 
+          console.log(`   👀 User has ${userRolesInGuild.length} roles in guild ${membership.discordGuildId}:`,
             userRolesInGuild.map(r => r.roleId).slice(0, 3));
           console.log(`   🎯 Looking for role: ${rank.discordRoleId}`);
         }
       }
 
-      if (lowestRankFound) {
-        console.log(`🎯 Lowest rank found: "${lowestRankFound.name}" (Level ${lowestRankFound.level})`);
+      if (highestRankFound) {
+        console.log(`🎯 Highest rank found: "${highestRankFound.name}" (Level ${highestRankFound.level})`);
       } else {
         console.log("❌ No matching rank roles found for user in this department");
       }

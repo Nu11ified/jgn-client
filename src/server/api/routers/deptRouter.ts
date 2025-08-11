@@ -539,25 +539,47 @@ export const deptRouter = createTRPCRouter({
         .input(createDepartmentSchema)
         .mutation(async ({ input }) => {
           try {
-            // Check if department name already exists
-            const existingDept = await postgrestDb
+            // Check if active department with same name exists
+            const existingActive = await postgrestDb
               .select()
               .from(deptSchema.departments)
-              .where(eq(deptSchema.departments.name, input.name))
+              .where(
+                and(
+                  eq(deptSchema.departments.name, input.name),
+                  eq(deptSchema.departments.isActive, true)
+                )
+              )
               .limit(1);
 
-            if (existingDept.length > 0) {
+            if (existingActive.length > 0) {
               throw new TRPCError({
                 code: "CONFLICT",
                 message: "Department with this name already exists",
               });
             }
 
+            // If an inactive department with the same name exists, reactivate it instead of creating a new one
+            const existingInactive = await postgrestDb
+              .select()
+              .from(deptSchema.departments)
+              .where(
+                and(
+                  eq(deptSchema.departments.name, input.name),
+                  eq(deptSchema.departments.isActive, false)
+                )
+              )
+              .limit(1);
+
             // Check if callsign prefix is already in use
             const existingPrefix = await postgrestDb
               .select()
               .from(deptSchema.departments)
-              .where(eq(deptSchema.departments.callsignPrefix, input.callsignPrefix))
+              .where(
+                and(
+                  eq(deptSchema.departments.callsignPrefix, input.callsignPrefix),
+                  eq(deptSchema.departments.isActive, true)
+                )
+              )
               .limit(1);
 
             if (existingPrefix.length > 0) {
@@ -565,6 +587,24 @@ export const deptRouter = createTRPCRouter({
                 code: "CONFLICT",
                 message: "Callsign prefix is already in use",
               });
+            }
+
+            if (existingInactive.length > 0) {
+              // Reactivate existing inactive department with updated fields
+              const reactivated = await postgrestDb
+                .update(deptSchema.departments)
+                .set({
+                  type: input.type,
+                  description: input.description,
+                  discordGuildId: input.discordGuildId,
+                  discordCategoryId: input.discordCategoryId,
+                  callsignPrefix: input.callsignPrefix,
+                  isActive: true,
+                  updatedAt: new Date(),
+                })
+                .where(eq(deptSchema.departments.id, existingInactive[0]!.id))
+                .returning();
+              return reactivated[0];
             }
 
             const result = await postgrestDb
@@ -3736,6 +3776,9 @@ export const deptRouter = createTRPCRouter({
 
           const isEditingSelf = actorDiscordId === targetDiscordId;
           let finalUpdateData = { ...updateData };
+
+          // Debug log (temporary) for rank checks
+          console.log('[MemberUpdate] actor', { actorDiscordId, actorRankLevel, actorPermissions: actorPermissions?.manage_members, targetDiscordId, targetRankLevel, isEditingSelf });
 
           // 3. Permission and Field Restriction Logic
           if (isEditingSelf) {

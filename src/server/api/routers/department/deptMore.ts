@@ -615,6 +615,64 @@ export const deptMoreRouter = createTRPCRouter({
                 }
             }),
 
+        // Update incident report (drafts or if manager)
+        updateReport: protectedProcedure
+            .input(z.object({
+                id: z.number().int().positive(),
+                title: z.string().min(1).max(200).optional(),
+                description: z.string().min(1).optional(),
+                location: z.string().optional().nullable(),
+                status: z.enum(["draft", "submitted"]).optional(),
+            }))
+            .mutation(async ({ input, ctx }) => {
+                try {
+                    // Load incident and member
+                    const inc = await postgrestDb
+                      .select({
+                        departmentId: deptSchema.departmentIncidents.departmentId,
+                        reportingMemberId: deptSchema.departmentIncidents.reportingMemberId,
+                        status: deptSchema.departmentIncidents.status,
+                      })
+                      .from(deptSchema.departmentIncidents)
+                      .where(eq(deptSchema.departmentIncidents.id, input.id))
+                      .limit(1);
+                    if (inc.length === 0) throw new TRPCError({ code: 'NOT_FOUND', message: 'Incident not found' });
+                    const incident = inc[0]!;
+
+                    // Check permissions: author can edit drafts; managers can edit
+                    const memberRow = await postgrestDb
+                      .select({ id: deptSchema.departmentMembers.id, permissions: deptSchema.departmentRanks.permissions })
+                      .from(deptSchema.departmentMembers)
+                      .leftJoin(deptSchema.departmentRanks, eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id))
+                      .where(and(
+                        eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                        eq(deptSchema.departmentMembers.departmentId, incident.departmentId),
+                        eq(deptSchema.departmentMembers.isActive, true)
+                      ))
+                      .limit(1);
+                    if (memberRow.length === 0) throw new TRPCError({ code: 'FORBIDDEN', message: 'Not a member of this department' });
+                    const isAuthor = memberRow[0]!.id === incident.reportingMemberId;
+                    const isManager = !!memberRow[0]!.permissions?.manage_members;
+                    if (!isAuthor && !isManager) throw new TRPCError({ code: 'FORBIDDEN', message: 'Insufficient permissions to edit incident' });
+                    if (isAuthor && incident.status !== 'draft') throw new TRPCError({ code: 'FORBIDDEN', message: 'Only drafts can be edited by the author' });
+
+                    const update: any = {};
+                    if (input.title !== undefined) update.title = input.title;
+                    if (input.description !== undefined) update.description = input.description;
+                    if (input.location !== undefined) update.location = input.location;
+                    if (input.status !== undefined) update.status = input.status;
+                    update.updatedAt = new Date();
+                    await postgrestDb
+                      .update(deptSchema.departmentIncidents)
+                      .set(update)
+                      .where(eq(deptSchema.departmentIncidents.id, input.id));
+                    return { success: true };
+                } catch (error) {
+                    if (error instanceof TRPCError) throw error;
+                    throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Failed to update incident report: ${error}` });
+                }
+            }),
+
         // Get incident reports
         getReports: protectedProcedure
             .input(z.object({
@@ -923,6 +981,33 @@ export const deptMoreRouter = createTRPCRouter({
 
     // ===== COMMUNICATION =====
     communication: createTRPCRouter({
+        getAcknowledgments: protectedProcedure
+            .input(z.object({ announcementId: z.number().int().positive() }))
+            .query(async ({ input, ctx }) => {
+                try {
+                    const rows = await postgrestDb
+                      .select({
+                        memberId: deptSchema.departmentAnnouncementAcknowledgments.memberId,
+                        acknowledgedAt: deptSchema.departmentAnnouncementAcknowledgments.acknowledgedAt,
+                        memberName: deptSchema.departmentMembers.roleplayName,
+                        memberCallsign: deptSchema.departmentMembers.callsign,
+                      })
+                      .from(deptSchema.departmentAnnouncementAcknowledgments)
+                      .innerJoin(
+                        deptSchema.departmentMembers,
+                        eq(deptSchema.departmentAnnouncementAcknowledgments.memberId, deptSchema.departmentMembers.id)
+                      )
+                      .where(eq(deptSchema.departmentAnnouncementAcknowledgments.announcementId, input.announcementId))
+                      .orderBy(desc(deptSchema.departmentAnnouncementAcknowledgments.acknowledgedAt));
+                    return rows.map(r => ({
+                      memberId: r.memberId,
+                      memberName: r.memberName || r.memberCallsign || `Member ${r.memberId}`,
+                      acknowledgedAt: r.acknowledgedAt,
+                    }));
+                } catch (error) {
+                    throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Failed to get acknowledgments: ${error}` });
+                }
+            }),
         // Send department announcement
         sendAnnouncement: protectedProcedure
             .input(announcementSchema)

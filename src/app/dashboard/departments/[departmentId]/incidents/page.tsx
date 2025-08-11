@@ -41,7 +41,7 @@ import {
 
 type IncidentType = "arrest" | "citation" | "investigation" | "emergency_response" | "training" | "other";
 type IncidentSeverity = "low" | "medium" | "high" | "critical";
-type IncidentStatus = "draft" | "submitted" | "under_review" | "approved" | "rejected";
+type IncidentStatus = "draft" | "submitted" | "under_review" | "approved" | "rejected" | "closed";
 
 type IncidentReport = {
   id: number;
@@ -50,7 +50,7 @@ type IncidentReport = {
   incidentType: IncidentType;
   severity: IncidentSeverity;
   status: IncidentStatus;
-  location?: string;
+  location?: string | null;
   dateOccurred: Date;
   reportingMember: string;
   involvedMembers: any[];
@@ -63,6 +63,8 @@ export default function IncidentReportsPage() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<IncidentStatus | "all">("all");
+  const [detailsDialog, setDetailsDialog] = useState<{ open: boolean; incident: IncidentReport | null }>({ open: false, incident: null });
+  const [editDialog, setEditDialog] = useState<{ open: boolean; incident: IncidentReport | null }>({ open: false, incident: null });
 
   // Form state
   const [incidentForm, setIncidentForm] = useState({
@@ -99,7 +101,7 @@ export default function IncidentReportsPage() {
   const { data: incidentReports, isLoading: reportsLoading, refetch: refetchReports } =
     api.deptMore.incidents.getReports.useQuery({
       departmentId,
-      status: statusFilter !== "all" ? statusFilter : undefined,
+      status: statusFilter !== "all" && statusFilter !== 'closed' ? statusFilter : undefined,
       limit: 50,
       offset: 0,
     });
@@ -127,6 +129,8 @@ export default function IncidentReportsPage() {
       toast.error(`Failed to create incident report: ${error.message}`);
     },
   });
+
+  const updateIncidentMutation = api.deptMore.incidents.updateReport.useMutation();
 
   const handleCreateIncident = () => {
     if (!incidentForm.title.trim() || !incidentForm.description.trim()) {
@@ -481,7 +485,7 @@ export default function IncidentReportsPage() {
                       </div>
                       <div className="flex items-center gap-2">
                         <MapPin className="h-4 w-4 text-muted-foreground" />
-                        <span>{incident.location}</span>
+                        <span>{incident.location ?? 'N/A'}</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <User className="h-4 w-4 text-muted-foreground" />
@@ -490,11 +494,11 @@ export default function IncidentReportsPage() {
                     </div>
 
                     <div className="flex justify-end gap-2">
-                      <Button variant="outline" size="sm">
+                      <Button variant="outline" size="sm" onClick={() => setDetailsDialog({ open: true, incident })}>
                         View Details
                       </Button>
                       {incident.status === "draft" && (
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" onClick={() => setEditDialog({ open: true, incident })}>
                           Edit Report
                         </Button>
                       )}
@@ -506,6 +510,73 @@ export default function IncidentReportsPage() {
           )}
         </div>
       </div>
+
+      {/* Details Dialog */}
+      <Dialog open={detailsDialog.open} onOpenChange={(open) => setDetailsDialog(prev => ({ ...prev, open }))}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Incident Details</DialogTitle>
+            <DialogDescription>{detailsDialog.incident?.title}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div><b>Type:</b> {detailsDialog.incident?.incidentType}</div>
+            <div><b>Severity:</b> {detailsDialog.incident?.severity}</div>
+            <div><b>Status:</b> {detailsDialog.incident?.status}</div>
+            <div><b>Date:</b> {detailsDialog.incident?.dateOccurred.toLocaleString()}</div>
+            {detailsDialog.incident?.location && <div><b>Location:</b> {detailsDialog.incident.location}</div>}
+            <div className="pt-2"><b>Description:</b></div>
+            <div className="whitespace-pre-wrap">{detailsDialog.incident?.description}</div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDetailsDialog({ open: false, incident: null })}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Dialog (basic editable fields for drafts) */}
+      <Dialog open={editDialog.open} onOpenChange={(open) => setEditDialog(prev => ({ ...prev, open }))}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Incident Report</DialogTitle>
+            <DialogDescription>Update draft incident report fields.</DialogDescription>
+          </DialogHeader>
+          {editDialog.incident && (
+            <div className="grid gap-3">
+              <div className="grid gap-1">
+                <Label htmlFor="editTitle">Title</Label>
+                <Input id="editTitle" value={editDialog.incident.title} onChange={(e) => setEditDialog(prev => prev.incident ? { open: true, incident: { ...(prev.incident as IncidentReport), title: e.target.value } as IncidentReport } : prev)} />
+              </div>
+              <div className="grid gap-1">
+                <Label htmlFor="editDescription">Description</Label>
+                <Textarea id="editDescription" rows={4} value={editDialog.incident.description} onChange={(e) => setEditDialog(prev => prev.incident ? { open: true, incident: { ...(prev.incident as IncidentReport), description: e.target.value } as IncidentReport } : prev)} />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialog({ open: false, incident: null })}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!editDialog.incident) return;
+                updateIncidentMutation.mutate({
+                  id: editDialog.incident.id,
+                  title: editDialog.incident.title,
+                  description: editDialog.incident.description,
+                  location: editDialog.incident.location ?? undefined,
+                }, {
+                  onSuccess: () => {
+                    toast.success('Incident updated');
+                    setEditDialog({ open: false, incident: null });
+                    void refetchReports();
+                  },
+                  onError: (err: unknown) => toast.error(err instanceof Error ? err.message : 'Failed to update'),
+                });
+              }}
+            >
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

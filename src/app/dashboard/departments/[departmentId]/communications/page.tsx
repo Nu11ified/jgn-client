@@ -67,6 +67,8 @@ export default function CommunicationsPage() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
+  const [detailsDialog, setDetailsDialog] = useState<{ open: boolean; announcement: Announcement | null }>({ open: false, announcement: null });
+  const [acksDialog, setAcksDialog] = useState<{ open: boolean; announcementId: number | null }>({ open: false, announcementId: null });
 
   // Form state
   const [announcementForm, setAnnouncementForm] = useState({
@@ -538,11 +540,11 @@ const announcementsData = announcements || [] as Announcement[];
                       </div>
 
                       <div className="flex gap-2">
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" onClick={() => setDetailsDialog({ open: true, announcement })}>
                           View Details
                         </Button>
                         {announcement.requiresAcknowledgment && (
-                          <Button variant="outline" size="sm">
+                          <Button variant="outline" size="sm" onClick={() => setAcksDialog({ open: true, announcementId: announcement.id })}>
                             View Acknowledgments
                           </Button>
                         )}
@@ -554,7 +556,62 @@ const announcementsData = announcements || [] as Announcement[];
             ))
           )}
         </div>
+        {/* Details Dialog */}
+        <Dialog open={detailsDialog.open} onOpenChange={(open) => setDetailsDialog(prev => ({ ...prev, open }))}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Announcement Details</DialogTitle>
+              <DialogDescription>
+                {detailsDialog.announcement?.title}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 text-sm">
+              <div><b>Priority:</b> {detailsDialog.announcement ? detailsDialog.announcement.priority : ''}</div>
+              <div><b>Audience:</b> {detailsDialog.announcement ? formatAudience(detailsDialog.announcement.targetAudience) : ''}</div>
+              <div><b>Created:</b> {detailsDialog.announcement?.createdAt.toLocaleString()}</div>
+              {detailsDialog.announcement?.expiresAt && (
+                <div><b>Expires:</b> {detailsDialog.announcement.expiresAt.toLocaleString()}</div>
+              )}
+              <div className="pt-2"><b>Content:</b></div>
+              <div className="whitespace-pre-wrap">{detailsDialog.announcement?.content}</div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDetailsDialog({ open: false, announcement: null })}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Acknowledgments Dialog */}
+        <Dialog open={acksDialog.open} onOpenChange={(open) => setAcksDialog(prev => ({ ...prev, open }))}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Acknowledgments</DialogTitle>
+              <DialogDescription>Members who acknowledged this announcement</DialogDescription>
+            </DialogHeader>
+            <AcknowledgmentsList departmentId={departmentId} announcementId={acksDialog.announcementId} />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAcksDialog({ open: false, announcementId: null })}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
+    </div>
+  );
+}
+
+function AcknowledgmentsList({ departmentId, announcementId }: { departmentId: number; announcementId: number | null }) {
+  const { data: acks, isLoading: acksLoading } = api.deptMore.communication.getAcknowledgments.useQuery({ announcementId: announcementId as number }, { enabled: !!announcementId });
+  if (!announcementId) return null;
+  if (acksLoading) return <div className="text-sm text-muted-foreground">Loading acknowledgments...</div>;
+  if (!acks || (Array.isArray(acks) && acks.length === 0)) return <div className="text-sm text-muted-foreground">No acknowledgments yet.</div>;
+  return (
+    <div className="space-y-2 max-h-64 overflow-auto">
+      {(acks as any[]).map((a, idx) => (
+        <div key={idx} className="text-sm flex items-center justify-between p-2 border rounded">
+          <span>{a.memberName || `Member ${a.memberId}`}</span>
+          <span className="text-muted-foreground text-xs">{new Date(a.acknowledgedAt).toLocaleString()}</span>
+        </div>
+      ))}
     </div>
   );
 }

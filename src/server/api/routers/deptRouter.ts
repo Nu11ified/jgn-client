@@ -23,6 +23,7 @@ import {
   DISCORD_SYNC_FEATURE_FLAGS,
   type RoleChangeAction,
 } from "@/server/api/services/department";
+import { invalidateDepartmentRoleMap } from "@/server/api/services/department/roleCache";
 
 // Import callsign service
 import { regenerateAndUpdateMemberCallsign } from "@/server/api/services/department/callsignService";
@@ -428,72 +429,68 @@ const getRankLimitInfo = async (
       )
       .orderBy(desc(deptSchema.departmentRanks.level));
 
-    const rankLimitInfos: RankLimitInfo[] = [];
+    const rankLimitInfos: RankLimitInfo[] = await Promise.all(
+      ranks.map(async (rank) => {
+        let effectiveLimit = rank.maxMembers;
+        let teamLimit: number | null = null;
 
-    for (const rank of ranks) {
-      let effectiveLimit = rank.maxMembers;
-      let teamLimit: number | null = null;
-
-      // Check for team-specific override if teamId is provided
-      if (teamId) {
-        const teamRankLimit = await postgrestDb
-          .select()
-          .from(deptSchema.departmentTeamRankLimits)
-          .where(
-            and(
-              eq(deptSchema.departmentTeamRankLimits.teamId, teamId),
-              eq(deptSchema.departmentTeamRankLimits.rankId, rank.id)
+        if (teamId) {
+          const teamRankLimit = await postgrestDb
+            .select()
+            .from(deptSchema.departmentTeamRankLimits)
+            .where(
+              and(
+                eq(deptSchema.departmentTeamRankLimits.teamId, teamId),
+                eq(deptSchema.departmentTeamRankLimits.rankId, rank.id)
+              )
             )
-          )
-          .limit(1);
+            .limit(1);
 
-        if (teamRankLimit.length > 0) {
-          effectiveLimit = teamRankLimit[0]!.maxMembers;
-          teamLimit = teamRankLimit[0]!.maxMembers;
+          if (teamRankLimit.length > 0) {
+            effectiveLimit = teamRankLimit[0]!.maxMembers;
+            teamLimit = teamRankLimit[0]!.maxMembers;
+          }
         }
-      }
 
-      // Count current members with this rank
-      let currentCount: number;
+        // Count current members with this rank
+        let currentCount = 0;
+        if (teamId && teamLimit !== null) {
+          const teamMemberCount = await postgrestDb
+            .select({ count: sql`count(*)` })
+            .from(deptSchema.departmentMembers)
+            .where(
+              and(
+                eq(deptSchema.departmentMembers.rankId, rank.id),
+                eq(deptSchema.departmentMembers.primaryTeamId, teamId),
+                eq(deptSchema.departmentMembers.isActive, true)
+              )
+            );
+          currentCount = Number(teamMemberCount[0]?.count ?? 0);
+        } else {
+          const deptMemberCount = await postgrestDb
+            .select({ count: sql`count(*)` })
+            .from(deptSchema.departmentMembers)
+            .where(
+              and(
+                eq(deptSchema.departmentMembers.rankId, rank.id),
+                eq(deptSchema.departmentMembers.departmentId, departmentId),
+                eq(deptSchema.departmentMembers.isActive, true)
+              )
+            );
+          currentCount = Number(deptMemberCount[0]?.count ?? 0);
+        }
 
-      if (teamId && teamLimit !== null) {
-        // Count members in the specific team with this rank
-        const teamMemberCount = await postgrestDb
-          .select({ count: sql`count(*)` })
-          .from(deptSchema.departmentMembers)
-          .where(
-            and(
-              eq(deptSchema.departmentMembers.rankId, rank.id),
-              eq(deptSchema.departmentMembers.primaryTeamId, teamId),
-              eq(deptSchema.departmentMembers.isActive, true)
-            )
-          );
-        currentCount = Number(teamMemberCount[0]?.count ?? 0);
-      } else {
-        // Count members in the entire department with this rank
-        const deptMemberCount = await postgrestDb
-          .select({ count: sql`count(*)` })
-          .from(deptSchema.departmentMembers)
-          .where(
-            and(
-              eq(deptSchema.departmentMembers.rankId, rank.id),
-              eq(deptSchema.departmentMembers.departmentId, departmentId),
-              eq(deptSchema.departmentMembers.isActive, true)
-            )
-          );
-        currentCount = Number(deptMemberCount[0]?.count ?? 0);
-      }
-
-      rankLimitInfos.push({
-        rankId: rank.id,
-        rankName: rank.name,
-        departmentLimit: rank.maxMembers,
-        teamLimit,
-        currentCount,
-        availableSlots: effectiveLimit ? Math.max(0, effectiveLimit - currentCount) : null,
-        isAtCapacity: effectiveLimit ? currentCount >= effectiveLimit : false,
-      });
-    }
+        return {
+          rankId: rank.id,
+          rankName: rank.name,
+          departmentLimit: rank.maxMembers,
+          teamLimit,
+          currentCount,
+          availableSlots: effectiveLimit ? Math.max(0, effectiveLimit - currentCount) : null,
+          isAtCapacity: effectiveLimit ? currentCount >= effectiveLimit : false,
+        } satisfies RankLimitInfo;
+      })
+    );
 
     return rankLimitInfos;
   } catch (error) {
@@ -1124,6 +1121,9 @@ export const deptRouter = createTRPCRouter({
               .values(input)
               .returning();
 
+            // Invalidate role map cache for this department
+            invalidateDepartmentRoleMap(input.departmentId);
+
             return result[0];
           } catch (error) {
             if (error instanceof TRPCError) throw error;
@@ -1234,6 +1234,9 @@ export const deptRouter = createTRPCRouter({
               .where(eq(deptSchema.departmentRanks.id, id))
               .returning();
 
+            // Invalidate role map cache for this department
+            invalidateDepartmentRoleMap(existingRank[0]!.departmentId);
+
             return result[0];
           } catch (error) {
             if (error instanceof TRPCError) throw error;
@@ -1309,6 +1312,9 @@ export const deptRouter = createTRPCRouter({
             await postgrestDb
               .delete(deptSchema.departmentRanks)
               .where(eq(deptSchema.departmentRanks.id, input.id));
+
+            // Invalidate role map cache for this department
+            invalidateDepartmentRoleMap(existingRank[0]!.departmentId);
 
             return { success: true, message: "Rank deleted successfully" };
           } catch (error) {
@@ -1393,6 +1399,9 @@ export const deptRouter = createTRPCRouter({
             if (newTeam.discordRoleId) {
               console.log(`Team ${newTeam.name} created with Discord role ${newTeam.discordRoleId}`);
             }
+
+            // Invalidate role map cache for this department
+            invalidateDepartmentRoleMap(input.departmentId);
 
             return newTeam;
           } catch (error) {
@@ -1502,26 +1511,33 @@ export const deptRouter = createTRPCRouter({
                   )
                 );
 
-              // Remove old Discord role from all members
+              // Remove old Discord role from all members (parallelized)
               if (currentTeam.discordRoleId) {
                 const serverId = await getServerIdFromRoleId(currentTeam.discordRoleId);
                 if (serverId) {
-                  for (const member of teamMembers) {
-                    await manageDiscordRole('remove', member.discordId, currentTeam.discordRoleId, serverId);
-                  }
+                  await Promise.allSettled(
+                    teamMembers.map((member) =>
+                      manageDiscordRole('remove', String(member.discordId), String(currentTeam.discordRoleId), serverId)
+                    )
+                  );
                 }
               }
 
-              // Add new Discord role to all members
+              // Add new Discord role to all members (parallelized)
               if (updatedTeam.discordRoleId) {
                 const serverId = await getServerIdFromRoleId(updatedTeam.discordRoleId);
                 if (serverId) {
-                  for (const member of teamMembers) {
-                    await manageDiscordRole('add', member.discordId, updatedTeam.discordRoleId, serverId);
-                  }
+                  await Promise.allSettled(
+                    teamMembers.map((member) =>
+                      manageDiscordRole('add', String(member.discordId), String(updatedTeam.discordRoleId), serverId)
+                    )
+                  );
                 }
               }
             }
+
+            // Invalidate role map cache for this department
+            invalidateDepartmentRoleMap(updatedTeam.departmentId);
 
             return updatedTeam;
           } catch (error) {
@@ -1590,9 +1606,11 @@ export const deptRouter = createTRPCRouter({
 
               const serverId = await getServerIdFromRoleId(team.discordRoleId);
               if (serverId) {
-                for (const member of teamMembers) {
-                  await manageDiscordRole('remove', member.discordId, team.discordRoleId, serverId);
-                }
+                await Promise.allSettled(
+                  teamMembers.map((member) =>
+                    manageDiscordRole('remove', String(member.discordId), String(team.discordRoleId), serverId)
+                  )
+                );
               }
             }
 
@@ -1605,6 +1623,9 @@ export const deptRouter = createTRPCRouter({
             await postgrestDb
               .delete(deptSchema.departmentTeams)
               .where(eq(deptSchema.departmentTeams.id, input.id));
+
+            // Invalidate role map cache for this department
+            invalidateDepartmentRoleMap(team.departmentId);
 
             return { success: true };
           } catch (error) {
@@ -2429,31 +2450,41 @@ export const deptRouter = createTRPCRouter({
             // Handle rank and team changes through the centralized sync service
             const roleChanges: RoleChangeAction[] = [];
 
-            if (updateData.rankId !== undefined && updateData.rankId !== currentMember.rankId) {
-              const rankRoleChanges = await createRankRoleChanges(currentMember.rankId, updateData.rankId, currentMember.departmentId);
+            const rankChanged = updateData.rankId !== undefined && updateData.rankId !== currentMember.rankId;
+            const teamChanged = updateData.primaryTeamId !== undefined && updateData.primaryTeamId !== currentMember.primaryTeamId;
+
+            if (rankChanged) {
+              const rankRoleChanges = await createRankRoleChanges(currentMember.rankId, updateData.rankId!, currentMember.departmentId);
               roleChanges.push(...rankRoleChanges);
             }
 
-            if (updateData.primaryTeamId !== undefined && updateData.primaryTeamId !== currentMember.primaryTeamId) {
-              const teamRoleChanges = await createTeamRoleChanges(currentMember.primaryTeamId, updateData.primaryTeamId, currentMember.departmentId);
+            if (teamChanged) {
+              const teamRoleChanges = await createTeamRoleChanges(currentMember.primaryTeamId, updateData.primaryTeamId!, currentMember.departmentId);
               roleChanges.push(...teamRoleChanges);
             }
 
-            // Apply role changes if any exist
-            if (roleChanges.length > 0) {
-              const syncResult = await performSecureSync({
+            // Optimistically update DB for rank/team to avoid UI lag
+            if (rankChanged || teamChanged) {
+              await postgrestDb
+                .update(deptSchema.departmentMembers)
+                .set({
+                  ...(rankChanged ? { rankId: updateData.rankId! } : {}),
+                  ...(teamChanged ? { primaryTeamId: updateData.primaryTeamId! } : {}),
+                  updatedAt: new Date(),
+                })
+                .where(eq(deptSchema.departmentMembers.id, currentMember.id));
+            }
+
+            // Run Discord sync in background if there are role changes, else still run for callsign when needed
+            if (rankChanged || teamChanged) {
+              void performSecureSync({
                 discordId: currentMember.discordId,
                 departmentId: currentMember.departmentId,
                 memberId: currentMember.id,
                 roleChanges,
-                skipRoleManagement: false,
+                skipRoleManagement: roleChanges.length === 0,
               });
-
-              if (!syncResult.success) {
-                console.warn(`⚠️ Role sync had issues: ${syncResult.message}`);
-              }
             } else if (updateData.rankId !== undefined || updateData.primaryTeamId !== undefined) {
-              // If rank/team changed but no Discord roles, still trigger background sync for callsign
               void performSecureSync({
                 discordId: currentMember.discordId,
                 departmentId: currentMember.departmentId,
@@ -4000,10 +4031,16 @@ export const deptRouter = createTRPCRouter({
               notes: input.notes,
             });
 
-            // Use the new centralized sync function to handle Discord role changes and database sync
+            // Optimistically update DB rank immediately to avoid UI lag
+            await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({ rankId: input.toRankId, updatedAt: new Date() })
+              .where(eq(deptSchema.departmentMembers.id, input.memberId));
+
+            // Prepare Discord role changes and run sync in background to reduce latency
             const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
 
-            const syncResult = await performSecureSync({
+            void performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
               memberId: member.id,
@@ -4011,21 +4048,13 @@ export const deptRouter = createTRPCRouter({
               skipRoleManagement: false,
             });
 
-            if (!syncResult.success) {
-              throw new TRPCError({
-                code: "INTERNAL_SERVER_ERROR",
-                message: `Promotion failed: ${syncResult.message}`,
-              });
-            }
-
             return {
               success: true,
-              message: "Promotion successful. Discord roles updated and database synchronized.",
+              message: "Promotion queued. Rank updated immediately; Discord roles syncing in background.",
               memberId: input.memberId,
               fromRankId: member.currentRankId,
               toRankId: input.toRankId,
               discordId: member.discordId,
-              syncResult,
             };
           } catch (error) {
             if (error instanceof TRPCError) throw error;
@@ -4154,10 +4183,16 @@ export const deptRouter = createTRPCRouter({
               notes: input.notes,
             });
 
-            // Use the new centralized sync function to handle Discord role changes and database sync
+            // Optimistically update DB rank immediately to avoid UI lag
+            await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({ rankId: input.toRankId, updatedAt: new Date() })
+              .where(eq(deptSchema.departmentMembers.id, input.memberId));
+
+            // Prepare Discord role changes and run sync in background to reduce latency
             const roleChanges = await createRankRoleChanges(member.currentRankId, input.toRankId, member.departmentId);
 
-            const syncResult = await performSecureSync({
+            void performSecureSync({
               discordId: member.discordId,
               departmentId: member.departmentId,
               memberId: member.id,
@@ -4165,21 +4200,13 @@ export const deptRouter = createTRPCRouter({
               skipRoleManagement: false,
             });
 
-            if (!syncResult.success) {
-              throw new TRPCError({
-                code: "INTERNAL_SERVER_ERROR",
-                message: `Demotion failed: ${syncResult.message}`,
-              });
-            }
-
             return {
               success: true,
-              message: "Demotion successful. Discord roles updated and database synchronized.",
+              message: "Demotion queued. Rank updated immediately; Discord roles syncing in background.",
               memberId: input.memberId,
               fromRankId: member.currentRankId,
               toRankId: input.toRankId,
               discordId: member.discordId,
-              syncResult,
             };
           } catch (error) {
             if (error instanceof TRPCError) throw error;

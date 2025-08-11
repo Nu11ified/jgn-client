@@ -132,7 +132,11 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
     count: filteredServers?.length ?? 0,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
-    overscan: 10, 
+    overscan: 10,
+    getItemKey: (index) => {
+      const s = filteredServers?.[index];
+      return s?.server_id ?? index;
+    }
   });
 
   const virtualItems = rowVirtualizer.getVirtualItems();
@@ -257,16 +261,17 @@ export default function ServersClient({ initialServers }: ServersClientProps) {
 
                   return (
                     <TableRow 
-                      key={(server.server_id ?? `server-${virtualItem.index}`) + "-" + virtualItem.index} // id should be unique
+                      key={virtualItem.key}
                       style={{
                         position: 'absolute',
-                        top: `${virtualItem.start}px`,
                         left: 0,
                         width: '100%',
                         height: `${virtualItem.size}px`,
                         display: 'flex',
+                        transform: `translateY(${virtualItem.start}px)`,
                       }}
                       data-index={virtualItem.index}
+                      ref={rowVirtualizer.measureElement}
                     >
                       <TableCell style={{ width: '60%' }} className="font-medium truncate">{server.server_name ?? 'Unknown Server'}</TableCell>
                       <TableCell style={{ width: '40%' }} className="truncate">{server.server_id ?? 'N/A'}</TableCell>

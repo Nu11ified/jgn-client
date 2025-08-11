@@ -1,7 +1,7 @@
 import { eq, and, isNotNull } from "drizzle-orm";
 import { postgrestDb } from "@/server/postgres";
 import * as deptSchema from "@/server/postgres/schema/department";
-import type { TeamUpdateResult } from "./types";
+import type { TeamUpdateResult, DiscordRole } from "./types";
 import { fetchUserDiscordRoles, checkUserHasRole } from "./discordRoleManager";
 import { DISCORD_SYNC_FEATURE_FLAGS } from "./constants";
 
@@ -12,13 +12,14 @@ export const updateUserTeamFromDiscordRoles = async (
   discordId: string,
   departmentId?: number,
   retryCount = 0,
-  maxRetries = 2
+  maxRetries = 2,
+  userRolesOverride?: DiscordRole[]
 ): Promise<TeamUpdateResult> => {
   try {
     console.log(`🏢 updateUserTeamFromDiscordRoles called for Discord ID: ${discordId}, Department: ${departmentId ?? 'all'}`);
 
-    // Get user's current Discord roles
-    const userRoles = await fetchUserDiscordRoles(discordId);
+    // Get user's current Discord roles (allow override to avoid duplicate fetches)
+    const userRoles = userRolesOverride ?? (await fetchUserDiscordRoles(discordId));
 
     // Get departments to check (either specific one or all where user is a member)
     const departmentConditions = [eq(deptSchema.departmentMembers.discordId, discordId)];
@@ -201,7 +202,7 @@ export const updateUserTeamFromDiscordRoles = async (
     if (!foundAnyTeamChanges && retryCount < maxRetries && departmentId) {
       console.log(`⏳ No team changes detected, retrying in 2 seconds (attempt ${retryCount + 1}/${maxRetries + 1})`);
       await new Promise(resolve => setTimeout(resolve, 2000));
-      return updateUserTeamFromDiscordRoles(discordId, departmentId, retryCount + 1, maxRetries);
+      return updateUserTeamFromDiscordRoles(discordId, departmentId, retryCount + 1, maxRetries, userRoles);
     }
 
     const message = updatedDepartments.length > 0 

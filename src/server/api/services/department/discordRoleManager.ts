@@ -81,8 +81,10 @@ export const manageDiscordRole = async (
         discord_server_id: serverId,
       };
       
-      console.log("🌐 Making role management API call to:", url);
-      console.log("📤 Payload:", payload);
+      if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+        console.log("🌐 Making role management API call to:", url);
+        console.log("📤 Payload:", payload);
+      }
 
       const response = await axios.post(url, payload, {
         headers: { "X-API-Key": M2M_API_KEY },
@@ -133,6 +135,67 @@ export const manageDiscordRole = async (
 };
 
 /**
+ * Batch manage roles for a single user to reduce API round-trips.
+ * Falls back to individual calls if batch endpoint fails or is unavailable.
+ */
+export const manageDiscordRolesBatch = async (
+  userDiscordId: string,
+  serverId: string,
+  adds: string[],
+  removes: string[],
+  maxRetries = 2
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    if (!M2M_API_KEY) {
+      return { success: false, error: "M2M API key not configured" };
+    }
+
+    const url = `${API_BASE_URL}/admin/discord_roles/manage_batch`;
+    const payload = {
+      discord_user_id: userDiscordId,
+      discord_server_id: serverId,
+      add_role_ids: adds,
+      remove_role_ids: removes,
+    };
+
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+      console.log("🌐 Batch role management API call:", url);
+      console.log("📤 Payload:", payload);
+    }
+
+    const response = await axios.post(url, payload, {
+      headers: { "X-API-Key": M2M_API_KEY },
+      timeout: 10000,
+    });
+
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+      console.log("✅ Batch role management result:", response.data);
+    }
+
+    return { success: true };
+  } catch (err) {
+    // Fallback: try individual calls
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+      console.warn("⚠️ Batch endpoint failed, falling back to individual role ops", err);
+    }
+    try {
+      const ops: Array<Promise<any>> = [];
+      for (const roleId of removes) {
+        ops.push(manageDiscordRole('remove', userDiscordId, roleId, serverId, maxRetries));
+      }
+      for (const roleId of adds) {
+        ops.push(manageDiscordRole('add', userDiscordId, roleId, serverId, maxRetries));
+      }
+      const results = await Promise.all(ops);
+      const anyFailed = results.some(r => !r.success);
+      return { success: !anyFailed, error: anyFailed ? 'One or more individual role ops failed' : undefined };
+    } catch (fallbackErr) {
+      return { success: false, error: fallbackErr instanceof Error ? fallbackErr.message : 'Batch and fallback ops failed' };
+    }
+  }
+};
+
+/**
  * Fetches all Discord roles for a user
  */
 export const fetchUserDiscordRoles = async (discordId: string): Promise<DiscordRole[]> => {
@@ -142,7 +205,9 @@ export const fetchUserDiscordRoles = async (discordId: string): Promise<DiscordR
       return [];
     }
 
-    console.log("🔍 Fetching user Discord roles from API...");
+      if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+        console.log("🔍 Fetching user Discord roles from API...");
+      }
     const rolesResponse = await axios.get(
       `${API_BASE_URL}/admin/user_server_roles/users/${discordId}/roles`,
       {
@@ -157,7 +222,9 @@ export const fetchUserDiscordRoles = async (discordId: string): Promise<DiscordR
       serverId: role.server_id 
     }));
 
-    console.log(`📋 Found ${userRoles.length} Discord roles for user`);
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+      console.log(`📋 Found ${userRoles.length} Discord roles for user`);
+    }
     if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
       // Show ALL roles, not just first 5
       console.log("🔍 User's Discord roles (ALL):", userRoles.map(r => `${r.roleId} (${r.serverId})`));
@@ -196,11 +263,15 @@ export const getServerIdFromRoleId = async (roleId: string): Promise<string | nu
     const cacheTime = cacheTimestamps.get(roleId);
     
     if (cachedValue !== undefined && cacheTime && (now - cacheTime) < CACHE_TTL) {
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
       console.log(`📋 Using cached server ID: ${cachedValue} for role: ${roleId}`);
+    }
       return cachedValue;
     }
 
-    console.log(`🔍 Fetching server ID for role: ${roleId}`);
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+      console.log(`🔍 Fetching server ID for role: ${roleId}`);
+    }
     // Use the more reliable /admin/roles/{role_id} endpoint
     const response = await axios.get(
       `${API_BASE_URL}/admin/roles/${roleId}`,
@@ -217,7 +288,9 @@ export const getServerIdFromRoleId = async (roleId: string): Promise<string | nu
     serverIdCache.set(roleId, serverId);
     cacheTimestamps.set(roleId, now);
     
-    console.log(`📋 Found server ID: ${serverId} for role: ${roleId}`);
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+      console.log(`📋 Found server ID: ${serverId} for role: ${roleId}`);
+    }
     return serverId;
   } catch (error) {
     // Handle 404 errors gracefully - this is expected for roles that don't exist
@@ -634,7 +707,7 @@ export const manageDiscordRoleWithVerification = async (
   }
   
   // If verification is requested and the action succeeded, verify the result
-  if (verifyAfterChange) {
+  if (verifyAfterChange && DISCORD_SYNC_FEATURE_FLAGS.ENABLE_ROLE_VERIFICATION) {
     console.log(`🔍 Verifying ${action} action succeeded...`);
     
     // Wait a moment for Discord to propagate the change

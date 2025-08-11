@@ -118,6 +118,10 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
     measureElement: typeof window !== 'undefined' 
       ? (element) => element?.getBoundingClientRect().height || ESTIMATED_ROW_HEIGHT
       : undefined,
+    getItemKey: (index) => {
+      const r = filteredRoles?.[index];
+      return r?.role_id ?? index;
+    },
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
   const totalHeight = rowVirtualizer.getTotalSize();
@@ -223,7 +227,7 @@ export default function RolesClient({ initialRoles }: RolesClientProps) {
                 if (!role) return null;
                 return (
                   <TableRow 
-                    key={role.role_id ?? `role-${virtualRow.index}`}
+                    key={virtualRow.key}
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                   >

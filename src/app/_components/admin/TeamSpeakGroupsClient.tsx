@@ -118,6 +118,10 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
     measureElement: typeof window !== 'undefined' 
       ? (element) => element?.getBoundingClientRect().height || ESTIMATED_ROW_HEIGHT
       : undefined,
+    getItemKey: (index) => {
+      const g = filteredGroups?.[index];
+      return g?.sgid ?? index;
+    },
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
   const totalHeight = rowVirtualizer.getTotalSize();
@@ -222,7 +226,7 @@ export default function TeamSpeakGroupsClient({ initialGroups }: TeamSpeakGroups
                 if (!group) return null;
                 return (
                   <TableRow 
-                    key={group.sgid ?? `group-${virtualRow.index}`}
+                    key={virtualRow.key}
                     data-index={virtualRow.index}
                     ref={rowVirtualizer.measureElement}
                   >

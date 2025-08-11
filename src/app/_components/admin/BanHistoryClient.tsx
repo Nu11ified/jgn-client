@@ -114,7 +114,11 @@ export default function BanHistoryClient({ initialBanHistory }: BanHistoryClient
     count: filteredBanHistory?.length ?? 0,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
-    overscan: 10, 
+    overscan: 10,
+    getItemKey: (index) => {
+      const b = filteredBanHistory?.[index];
+      return b?.id ?? index;
+    }
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
   const isLoadingUiForInitialData = isFetchingAll && allFetchedBanHistory.length === 0 && !fetchingError;
@@ -211,7 +215,7 @@ export default function BanHistoryClient({ initialBanHistory }: BanHistoryClient
                 const entry = filteredBanHistory[virtualRow.index];
                 if (!entry) return null;
                 return (
-                  <TableRow key={entry.id} style={{ height: `${virtualRow.size}px` }}>
+                  <TableRow key={virtualRow.key} style={{ height: `${virtualRow.size}px` }}>
                     <TableCell>{entry.user_discord_id ?? 'N/A'}</TableCell>
                     <TableCell>{entry.server_id ?? 'N/A'}</TableCell>
                     <TableCell>{entry.banned_by_user_id ?? "N/A"}</TableCell>

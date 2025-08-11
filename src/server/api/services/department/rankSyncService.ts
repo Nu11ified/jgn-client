@@ -10,13 +10,14 @@ import { DISCORD_SYNC_FEATURE_FLAGS } from "./constants";
  */
 export const updateUserRankFromDiscordRoles = async (
   discordId: string,
-  departmentId?: number
+  departmentId?: number,
+  userRolesOverride?: DiscordRole[]
 ): Promise<RankUpdateResult> => {
   try {
     console.log(`📊 updateUserRankFromDiscordRoles called for Discord ID: ${discordId}, Department: ${departmentId ?? 'all'}`);
 
-    // Get user's current Discord roles
-    const userRoles = await fetchUserDiscordRoles(discordId);
+    // Get user's current Discord roles (allow override to avoid duplicate fetches)
+    const userRoles = userRolesOverride ?? (await fetchUserDiscordRoles(discordId));
 
     // Get departments to check (either specific one or all where user is a member)
     const departmentConditions = [eq(deptSchema.departmentMembers.discordId, discordId)];

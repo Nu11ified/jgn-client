@@ -63,42 +63,40 @@ export async function bulkUpdateMembers(params: BulkUpdateParams): Promise<BulkO
       failureCount++;
     });
 
-    // Process each existing member
-    for (const member of existingMembers) {
-      try {
-        // Validate the update is allowed for this member
-        const validationResult = await validateMemberUpdate(member, updates, performedBy);
-        if (!validationResult.valid) {
-          results.push({
+    // Process members in parallel, but safely collect results
+    const settledUpdates = await Promise.allSettled(
+      existingMembers.map(async (member) => {
+        try {
+          const validationResult = await validateMemberUpdate(member, updates, performedBy);
+          if (!validationResult.valid) {
+            return {
+              memberId: member.id,
+              success: false,
+              message: validationResult.reason || "Update not allowed",
+            } as BulkOperationResult["results"][number];
+          }
+          const updateResult = await updateSingleMember(member, updates, reason, performedBy);
+          return {
+            memberId: member.id,
+            success: updateResult.success,
+            message: updateResult.message,
+            data: updateResult.data,
+          } as BulkOperationResult["results"][number];
+        } catch (error) {
+          return {
             memberId: member.id,
             success: false,
-            message: validationResult.reason || "Update not allowed",
-          });
-          failureCount++;
-          continue;
+            message: `Update failed: ${error}`,
+          } as BulkOperationResult["results"][number];
         }
+      })
+    );
 
-        // Perform the update
-        const updateResult = await updateSingleMember(member, updates, reason, performedBy);
-
-        results.push({
-          memberId: member.id,
-          success: updateResult.success,
-          message: updateResult.message,
-          data: updateResult.data,
-        });
-
-        if (updateResult.success) {
-          successCount++;
-        } else {
-          failureCount++;
-        }
-      } catch (error) {
-        results.push({
-          memberId: member.id,
-          success: false,
-          message: `Update failed: ${error}`,
-        });
+    for (const s of settledUpdates) {
+      if (s.status === 'fulfilled') {
+        results.push(s.value);
+        if (s.value.success) successCount++; else failureCount++;
+      } else {
         failureCount++;
       }
     }
@@ -201,54 +199,34 @@ export async function bulkPromoteMembers(params: {
       .from(deptSchema.departmentMembers)
       .where(inArray(deptSchema.departmentMembers.id, memberIds));
 
-    // Process each member
-    for (const memberId of memberIds) {
-      const member = members.find(m => m.id === memberId);
+    const memberById = new Map<number, typeof members[number]>();
+    for (const m of members) memberById.set(m.id, m);
 
-      if (!member) {
-        results.push({
-          memberId,
-          success: false,
-          message: "Member not found",
-        });
-        failureCount++;
-        continue;
-      }
-
-      try {
-        // Validate promotion is allowed
-        const validationResult = await validatePromotion(member, rank, performedBy);
-        if (!validationResult.valid) {
-          results.push({
-            memberId,
-            success: false,
-            message: validationResult.reason || "Promotion not allowed",
-          });
-          failureCount++;
-          continue;
+    // Process each member in parallel
+    const settledPromotions = await Promise.allSettled(
+      memberIds.map(async (memberId) => {
+        const member = memberById.get(memberId);
+        if (!member) {
+          return { memberId, success: false, message: "Member not found" } as BulkOperationResult["results"][number];
         }
-
-        // Perform the promotion
-        const promotionResult = await promoteSingleMember(member, rank, reason, effectiveDate, performedBy);
-
-        results.push({
-          memberId,
-          success: promotionResult.success,
-          message: promotionResult.message,
-          data: promotionResult.data,
-        });
-
-        if (promotionResult.success) {
-          successCount++;
-        } else {
-          failureCount++;
+        try {
+          const validationResult = await validatePromotion(member, rank, performedBy);
+          if (!validationResult.valid) {
+            return { memberId, success: false, message: validationResult.reason || "Promotion not allowed" } as BulkOperationResult["results"][number];
+          }
+          const promotionResult = await promoteSingleMember(member, rank, reason, effectiveDate, performedBy);
+          return { memberId, success: promotionResult.success, message: promotionResult.message, data: promotionResult.data } as BulkOperationResult["results"][number];
+        } catch (error) {
+          return { memberId, success: false, message: `Promotion failed: ${error}` } as BulkOperationResult["results"][number];
         }
-      } catch (error) {
-        results.push({
-          memberId,
-          success: false,
-          message: `Promotion failed: ${error}`,
-        });
+      })
+    );
+
+    for (const s of settledPromotions) {
+      if (s.status === 'fulfilled') {
+        results.push(s.value);
+        if (s.value.success) successCount++; else failureCount++;
+      } else {
         failureCount++;
       }
     }
@@ -349,54 +327,31 @@ export async function bulkAssignTeam(params: {
       .from(deptSchema.departmentMembers)
       .where(inArray(deptSchema.departmentMembers.id, memberIds));
 
-    // Process each member
-    for (const memberId of memberIds) {
-      const member = members.find(m => m.id === memberId);
-
-      if (!member) {
-        results.push({
-          memberId,
-          success: false,
-          message: "Member not found",
-        });
-        failureCount++;
-        continue;
-      }
-
-      try {
-        // Validate team assignment is allowed
-        const validationResult = await validateTeamAssignment(member, team, performedBy);
-        if (!validationResult.valid) {
-          results.push({
-            memberId,
-            success: false,
-            message: validationResult.reason || "Team assignment not allowed",
-          });
-          failureCount++;
-          continue;
+    // Process each member in parallel
+    const settledAssignments = await Promise.allSettled(
+      memberIds.map(async (memberId) => {
+        const member = members.find(m => m.id === memberId);
+        if (!member) {
+          return { memberId, success: false, message: "Member not found" } as BulkOperationResult["results"][number];
         }
-
-        // Perform the team assignment
-        const assignmentResult = await assignMemberToTeam(member, team, reason, performedBy);
-
-        results.push({
-          memberId,
-          success: assignmentResult.success,
-          message: assignmentResult.message,
-          data: assignmentResult.data,
-        });
-
-        if (assignmentResult.success) {
-          successCount++;
-        } else {
-          failureCount++;
+        try {
+          const validationResult = await validateTeamAssignment(member, team, performedBy);
+          if (!validationResult.valid) {
+            return { memberId, success: false, message: validationResult.reason || "Team assignment not allowed" } as BulkOperationResult["results"][number];
+          }
+          const assignmentResult = await assignMemberToTeam(member, team, reason, performedBy);
+          return { memberId, success: assignmentResult.success, message: assignmentResult.message, data: assignmentResult.data } as BulkOperationResult["results"][number];
+        } catch (error) {
+          return { memberId, success: false, message: `Team assignment failed: ${error}` } as BulkOperationResult["results"][number];
         }
-      } catch (error) {
-        results.push({
-          memberId,
-          success: false,
-          message: `Team assignment failed: ${error}`,
-        });
+      })
+    );
+
+    for (const s of settledAssignments) {
+      if (s.status === 'fulfilled') {
+        results.push(s.value);
+        if (s.value.success) successCount++; else failureCount++;
+      } else {
         failureCount++;
       }
     }

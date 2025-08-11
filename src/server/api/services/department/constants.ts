@@ -1,16 +1,26 @@
 // Feature flags for Discord sync behavior
 export const DISCORD_SYNC_FEATURE_FLAGS = {
   ENABLE_AUTO_SYNC_AFTER_ROLE_CHANGE: true,
-  SYNC_DELAY_MS: 15000, // Reduced from 10s to 15s - most Discord changes propagate quickly
+  // Reduce propagation wait to improve UX; verification handles correctness
+  SYNC_DELAY_MS: 3000,
   ENABLE_RANK_LIMIT_VALIDATION: true,
   ENABLE_CALLSIGN_AUTO_GENERATION: true,
-  ENABLE_DETAILED_LOGGING: true, // Temporarily enabled for debugging
+  // Lower verbosity in production by default
+  ENABLE_DETAILED_LOGGING: process.env.NODE_ENV !== 'production',
+  ENABLE_ROLE_VERIFICATION: true, // Keep verification enabled in all envs
   MAX_SYNC_RETRIES: 2,
   ENABLE_ASYNC_MEMBER_CREATION_SYNC: true, // New flag: run Discord sync in background during member creation
+  ENABLE_BATCH_ROLE_MANAGEMENT: true, // Prefer batch API when available
 } as const;
 
 // Default sync configuration - optimized for better performance
 export const DEFAULT_SYNC_CONFIG = {
-  MAX_ATTEMPTS: 3, // Reduced from 3 to 2 - most changes happen immediately
-  INTERVAL_MS: 1500, // Reduced from 1.5s to 1s - faster polling
+  // Faster polling, fewer attempts for quicker resolution
+  MAX_ATTEMPTS: 2,
+  INTERVAL_MS: 1000,
 } as const; 
+
+// Cache TTLs (ms)
+export const ROLE_CACHE_TTLS = {
+  DEPARTMENT_ROLE_MAP_MS: 3 * 60 * 1000, // 3 minutes
+} as const;

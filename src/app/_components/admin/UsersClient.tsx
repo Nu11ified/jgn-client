@@ -229,6 +229,11 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
     getScrollElement: () => parentRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
     overscan: 10,
+    // Stable keys improve DOM reuse and avoid flicker
+    getItemKey: (index) => {
+      const u = filteredUsers?.[index];
+      return u?.discord_id ?? u?.id ?? index;
+    },
   });
 
   const virtualItems = rowVirtualizer.getVirtualItems();
@@ -248,16 +253,17 @@ export default function UsersClient({ initialUsers }: UsersClientProps) {
   // Modify the existing table row to add a role management button
   const renderTableRow = (user: User, virtualItem: VirtualItem) => (
     <TableRow 
-      key={(user.discord_id ?? user.id ?? virtualItem.index) + "-" + virtualItem.index} 
+      key={virtualItem.key}
       style={{
         position: 'absolute',
-        top: `${virtualItem.start}px`,
         left: 0,
         width: '100%',
         height: `${virtualItem.size}px`,
         display: 'flex',
+        transform: `translateY(${virtualItem.start}px)`,
       }}
       data-index={virtualItem.index}
+      ref={rowVirtualizer.measureElement}
     >
       <TableCell 
         style={{ 

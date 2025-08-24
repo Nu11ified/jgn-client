@@ -529,6 +529,56 @@ function assertCanActOnMember({ actorDiscordId, actorRankLevel, targetDiscordId,
   }
 }
 
+// Determine rank direction per department (cache for short-lived runs)
+// desc = larger level is more senior; asc = smaller level is more senior
+const rankDirectionCache = new Map<number, "asc" | "desc">();
+async function getDepartmentRankDirection(departmentId: number): Promise<"asc" | "desc"> {
+  const cached = rankDirectionCache.get(departmentId);
+  if (cached) return cached;
+
+  // Look at ranks and use permissions to infer top rank placement
+  const ranks = await postgrestDb
+    .select({ level: deptSchema.departmentRanks.level, permissions: deptSchema.departmentRanks.permissions })
+    .from(deptSchema.departmentRanks)
+    .where(eq(deptSchema.departmentRanks.departmentId, departmentId));
+
+  if (ranks.length === 0) {
+    rankDirectionCache.set(departmentId, "desc");
+    return "desc";
+  }
+  const levels = ranks.map(r => r.level).filter((l): l is number => typeof l === "number");
+  const minLevel = Math.min(...levels);
+  const maxLevel = Math.max(...levels);
+  // Prefer manage_department to infer top rank
+  const topRanks = ranks.filter(r => r.permissions?.manage_department === true);
+  const probeLevels = (topRanks.length > 0 ? topRanks : ranks.filter(r => r.permissions?.manage_members === true)).map(r => r.level);
+  const hasMax = probeLevels.some(l => l === maxLevel);
+  const hasMin = probeLevels.some(l => l === minLevel);
+  const direction: "asc" | "desc" = hasMax && !hasMin ? "desc" : hasMin && !hasMax ? "asc" : "desc";
+  rankDirectionCache.set(departmentId, direction);
+  return direction;
+}
+
+// Async, department-aware checker that respects inferred rank direction
+async function ensureCanActOnMember(params: { departmentId: number; actorDiscordId: string; actorRankLevel: number | null | undefined; targetDiscordId: string; targetRankLevel: number | null | undefined; actionName: string; }) {
+  const { departmentId, actorDiscordId, actorRankLevel, targetDiscordId, targetRankLevel, actionName } = params;
+  if (actorDiscordId === targetDiscordId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: `You cannot ${actionName} for yourself.` });
+  }
+  if (actorRankLevel == null) {
+    throw new TRPCError({ code: "FORBIDDEN", message: `Your department rank is not assigned. Please contact an administrator.` });
+  }
+  if (targetRankLevel == null) return; // target treated as lowest
+
+  const dir = await getDepartmentRankDirection(departmentId);
+  const isForbidden = dir === "desc"
+    ? targetRankLevel >= actorRankLevel
+    : targetRankLevel <= actorRankLevel;
+  if (isForbidden) {
+    throw new TRPCError({ code: "FORBIDDEN", message: `You cannot ${actionName} for someone of equal or higher rank.` });
+  }
+}
+
 export const deptRouter = createTRPCRouter({
   // Organize routes using CRUD structure following tRPC best practices
   admin: createTRPCRouter({
@@ -2863,11 +2913,12 @@ export const deptRouter = createTRPCRouter({
             }
 
             // 3. Assert actor can act on target
-            assertCanActOnMember({
+            await ensureCanActOnMember({
+              departmentId: input.departmentId,
               actorDiscordId: actorDiscordId,
-              actorRankLevel: actorMember.rankLevel ?? 0,
+              actorRankLevel: actorMember.rankLevel ?? null,
               targetDiscordId: targetMember?.discordId,
-              targetRankLevel: targetMember?.rankLevel ?? 0,
+              targetRankLevel: targetMember?.rankLevel ?? null,
               actionName: "delete member"
             });
             // 4. Perform soft deletion
@@ -3709,7 +3760,7 @@ export const deptRouter = createTRPCRouter({
           }
           const targetMember = targetMemberQuery[0]!;
           const targetDiscordId = targetMember.discordId;
-          const targetRankLevel = targetMember.rankLevel ?? 0; // Default to 0 if no rank
+          const targetRankLevel = targetMember.rankLevel ?? null; // Treat missing as null (lowest)
 
           // 2. Fetch actor's (current user) membership in the target member's department
           const actorMemberQuery = await postgrestDb
@@ -3740,10 +3791,10 @@ export const deptRouter = createTRPCRouter({
           }
           const actorMember = actorMemberQuery[0]!;
           let actorPermissions = actorMember.permissions;
-          let actorRankLevel = actorMember.rankLevel ?? 0;
+          let actorRankLevel = actorMember.rankLevel ?? null;
 
           // If actor has manage_members but rank level is missing/zero, try to resync from Discord and refresh
-          if ((actorRankLevel === 0 || actorRankLevel == null) && actorPermissions?.manage_members) {
+          if ((actorRankLevel == null) && actorPermissions?.manage_members) {
             try {
               await updateUserRankFromDiscordRoles(actorDiscordId, targetMember.departmentId);
               const refreshed = await postgrestDb
@@ -3767,7 +3818,7 @@ export const deptRouter = createTRPCRouter({
                 .limit(1);
               if (refreshed.length > 0) {
                 actorPermissions = refreshed[0]!.permissions;
-                actorRankLevel = refreshed[0]!.rankLevel ?? 0;
+                actorRankLevel = refreshed[0]!.rankLevel ?? null;
               }
             } catch (e) {
               // continue; fall back to existing values
@@ -3838,7 +3889,8 @@ export const deptRouter = createTRPCRouter({
               });
             }
             // Apply rank hierarchy check
-            assertCanActOnMember({
+            await ensureCanActOnMember({
+              departmentId: targetMember.departmentId,
               actorDiscordId,
               actorRankLevel,
               targetDiscordId,
@@ -4069,7 +4121,8 @@ export const deptRouter = createTRPCRouter({
             }
 
             // 3. Rank hierarchy check (prevents self and equal/higher)
-            assertCanActOnMember({
+            await ensureCanActOnMember({
+              departmentId: targetMember.departmentId,
               actorDiscordId,
               actorRankLevel: actor.rankLevel,
               targetDiscordId: targetMember.discordId,
@@ -4228,7 +4281,8 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Prevent acting on self or equal/higher rank
-            assertCanActOnMember({
+            await ensureCanActOnMember({
+              departmentId: member.departmentId,
               actorDiscordId: String(ctx.dbUser.discordId),
               actorRankLevel: promoter[0]!.level!,
               targetDiscordId: member.discordId,
@@ -4380,7 +4434,8 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Prevent acting on self or equal/higher rank
-            assertCanActOnMember({
+            await ensureCanActOnMember({
+              departmentId: member.departmentId,
               actorDiscordId: String(ctx.dbUser.discordId),
               actorRankLevel: demoter[0]!.level!,
               targetDiscordId: member.discordId,
@@ -4629,7 +4684,8 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Prevent acting on self or equal/higher rank
-            assertCanActOnMember({
+            await ensureCanActOnMember({
+              departmentId: member.departmentId,
               actorDiscordId: String(ctx.dbUser.discordId),
               actorRankLevel: issuer[0]!.level!,
               targetDiscordId: member.discordId,
@@ -4875,7 +4931,8 @@ export const deptRouter = createTRPCRouter({
             }
 
             // Prevent acting on self or equal/higher rank
-            assertCanActOnMember({
+            await ensureCanActOnMember({
+              departmentId: disciplinaryAction.departmentId,
               actorDiscordId: String(ctx.dbUser.discordId),
               actorRankLevel: requester[0]!.level!,
               targetDiscordId: disciplinaryAction.memberDiscordId,
@@ -5665,6 +5722,189 @@ export const deptRouter = createTRPCRouter({
 
     // ===== DEPARTMENT INFO AND MEMBERS =====
     info: createTRPCRouter({
+      // Can current user act on a member for a specific action (permission + rank + self checks)
+      canActOnMember: protectedProcedure
+        .input(z.object({
+          departmentId: z.number().int().positive(),
+          targetMemberId: z.number().int().positive(),
+          action: z.enum(['manage','promote','demote','discipline','remove','delete','dismiss_disciplinary']),
+        }))
+        .query(async ({ ctx, input }) => {
+          try {
+            const targetRows = await postgrestDb
+              .select({
+                discordId: deptSchema.departmentMembers.discordId,
+                rankLevel: deptSchema.departmentRanks.level,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.id, input.targetMemberId),
+                  eq(deptSchema.departmentMembers.departmentId, input.departmentId)
+                )
+              )
+              .limit(1);
+
+            if (targetRows.length === 0) {
+              return { can: false, reason: 'Member not found in department' };
+            }
+            const target = targetRows[0]!;
+
+            const actorRows = await postgrestDb
+              .select({
+                rankLevel: deptSchema.departmentRanks.level,
+                permissions: deptSchema.departmentRanks.permissions,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                  eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                  eq(deptSchema.departmentMembers.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (actorRows.length === 0) {
+              return { can: false, reason: 'You are not an active member of this department' };
+            }
+            const actor = actorRows[0]!;
+
+            // Map required permission per action (following current router logic)
+            const requires: Record<typeof input.action, boolean> = {
+              manage: !!actor.permissions?.manage_members,
+              promote: !!actor.permissions?.promote_members,
+              demote: !!actor.permissions?.demote_members,
+              discipline: !!actor.permissions?.discipline_members,
+              remove: !!actor.permissions?.manage_members,
+              delete: !!actor.permissions?.manage_members,
+              dismiss_disciplinary: !!actor.permissions?.discipline_members,
+            };
+
+            if (!requires[input.action]) {
+              const messages: Record<typeof input.action, string> = {
+                manage: 'You do not have permission to manage members in this department',
+                promote: 'You do not have permission to promote members',
+                demote: 'You do not have permission to demote members',
+                discipline: 'You do not have permission to issue disciplinary actions',
+                remove: 'You do not have permission to remove members in this department',
+                delete: 'You do not have permission to delete members in this department',
+                dismiss_disciplinary: 'You do not have permission to dismiss disciplinary actions',
+              };
+              return { can: false, reason: messages[input.action] };
+            }
+
+            try {
+              await ensureCanActOnMember({
+                departmentId: input.departmentId,
+                actorDiscordId: String(ctx.dbUser.discordId),
+                actorRankLevel: actor.rankLevel ?? null,
+                targetDiscordId: target.discordId,
+                targetRankLevel: target.rankLevel ?? null,
+                actionName: input.action.replace('_',' '),
+              });
+              return { can: true };
+            } catch (err) {
+              if (err instanceof TRPCError) {
+                return { can: false, reason: err.message };
+              }
+              return { can: false, reason: 'Unknown authorization error' };
+            }
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to check action capability' });
+          }
+        }),
+      // Can current user manage a specific member (rank + self checks)
+      canManageMember: protectedProcedure
+        .input(z.object({
+          departmentId: z.number().int().positive(),
+          targetMemberId: z.number().int().positive(),
+          actionName: z.string().default('manage member'),
+        }))
+        .query(async ({ ctx, input }) => {
+          try {
+            // Fetch target member rank level and discord id
+            const targetRows = await postgrestDb
+              .select({
+                discordId: deptSchema.departmentMembers.discordId,
+                rankLevel: deptSchema.departmentRanks.level,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.id, input.targetMemberId),
+                  eq(deptSchema.departmentMembers.departmentId, input.departmentId)
+                )
+              )
+              .limit(1);
+
+            if (targetRows.length === 0) {
+              return { can: false, reason: 'Member not found in department' };
+            }
+            const target = targetRows[0]!;
+
+            // Fetch actor membership and permissions
+            const actorRows = await postgrestDb
+              .select({
+                rankLevel: deptSchema.departmentRanks.level,
+                permissions: deptSchema.departmentRanks.permissions,
+              })
+              .from(deptSchema.departmentMembers)
+              .leftJoin(
+                deptSchema.departmentRanks,
+                eq(deptSchema.departmentMembers.rankId, deptSchema.departmentRanks.id)
+              )
+              .where(
+                and(
+                  eq(deptSchema.departmentMembers.discordId, String(ctx.dbUser.discordId)),
+                  eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                  eq(deptSchema.departmentMembers.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (actorRows.length === 0) {
+              return { can: false, reason: 'You are not an active member of this department' };
+            }
+            const actor = actorRows[0]!;
+            if (!actor.permissions?.manage_members) {
+              return { can: false, reason: 'You do not have permission to manage members in this department' };
+            }
+
+            try {
+              await ensureCanActOnMember({
+                departmentId: input.departmentId,
+                actorDiscordId: String(ctx.dbUser.discordId),
+                actorRankLevel: actor.rankLevel ?? null,
+                targetDiscordId: target.discordId,
+                targetRankLevel: target.rankLevel ?? null,
+                actionName: input.actionName,
+              });
+              return { can: true };
+            } catch (err) {
+              if (err instanceof TRPCError) {
+                return { can: false, reason: err.message };
+              }
+              return { can: false, reason: 'Unknown authorization error' };
+            }
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to check member management capability' });
+          }
+        }),
       // Member audit logs
       getMemberAuditLogs: protectedProcedure
         .input(z.object({

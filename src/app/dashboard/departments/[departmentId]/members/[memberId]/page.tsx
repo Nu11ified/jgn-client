@@ -231,24 +231,53 @@ export default function MemberDetailsPage() {
   // If permissions.hasPermission is false, it means the user is not a member or doesn't have permission
   const isUserMemberOfDepartment = permissions?.hasPermission === true;
   
-  // For rank-based checks, we need to get the current user's rank in this department
-  // We'll use a separate query to get the current user's membership info for this department
-  const { data: currentUserMembership } = api.dept.user.info.getDepartmentRoster.useQuery({
+  // Use server-side check to determine if current user can manage this member
+  const { data: manageCheck } = api.dept.user.info.canManageMember.useQuery({
     departmentId,
-    includeInactive: false,
-    memberIdFilter: undefined, // Get all members to find current user
-  }, {
-    enabled: !!currentUser?.discordId && !!departmentId,
-  });
+    targetMemberId: memberId,
+    actionName: 'manage member',
+  }, { enabled: !!departmentId && !!memberId && (permissions?.hasPermission ?? false) });
+  // Action-specific checks
+  const { data: promoteCheck } = api.dept.user.info.canActOnMember.useQuery({
+    departmentId,
+    targetMemberId: memberId,
+    action: 'promote',
+  }, { enabled: !!departmentId && !!memberId && (promotePermission?.hasPermission ?? false) });
+  const { data: demoteCheck } = api.dept.user.info.canActOnMember.useQuery({
+    departmentId,
+    targetMemberId: memberId,
+    action: 'demote',
+  }, { enabled: !!departmentId && !!memberId && (demotePermission?.hasPermission ?? false) });
+  const { data: disciplineCheck } = api.dept.user.info.canActOnMember.useQuery({
+    departmentId,
+    targetMemberId: memberId,
+    action: 'discipline',
+  }, { enabled: !!departmentId && !!memberId && (disciplinePermission?.hasPermission ?? false) });
+  const { data: dismissDisciplineCheck } = api.dept.user.info.canActOnMember.useQuery({
+    departmentId,
+    targetMemberId: memberId,
+    action: 'dismiss_disciplinary',
+  }, { enabled: !!departmentId && !!memberId && (disciplinePermission?.hasPermission ?? false) });
+  const { data: removeCheck } = api.dept.user.info.canActOnMember.useQuery({
+    departmentId,
+    targetMemberId: memberId,
+    action: 'remove',
+  }, { enabled: !!departmentId && !!memberId && (permissions?.hasPermission ?? false) });
+  const { data: deleteCheck } = api.dept.user.info.canActOnMember.useQuery({
+    departmentId,
+    targetMemberId: memberId,
+    action: 'delete',
+  }, { enabled: !!departmentId && !!memberId && (permissions?.hasPermission ?? false) });
 
-  // Find current user in the current department
-  const currentUserMember = currentUserMembership?.members?.find(
-    m => m.discordId === currentUser?.discordId
+  const canEditMember = !isActingOnSelf && isUserMemberOfDepartment && (manageCheck?.can ?? false);
+  const canManageBasedOnRank = !isActingOnSelf && isUserMemberOfDepartment && (
+    (canPromote && (promoteCheck?.can ?? false)) ||
+    (canDemote && (demoteCheck?.can ?? false)) ||
+    (canDiscipline && (disciplineCheck?.can ?? false)) ||
+    (removeCheck?.can ?? false) ||
+    (deleteCheck?.can ?? false) ||
+    (manageCheck?.can ?? false)
   );
-  
-  const currentUserRankLevel = currentUserMember?.rankLevel ?? 0;
-  const targetMemberRankLevel = memberData?.rankLevel ?? 0;
-  const canManageBasedOnRank = !isActingOnSelf && isUserMemberOfDepartment && currentUserRankLevel > targetMemberRankLevel;
 
   // Debug logging to help understand permission issues
   if (process.env.NODE_ENV === 'development') {
@@ -259,9 +288,8 @@ export default function MemberDetailsPage() {
       isUserMemberOfDepartment,
       currentUser: currentUser?.discordId,
       memberData: memberData?.discordId,
-      currentUserRankLevel,
-      targetMemberRankLevel,
-      canManageBasedOnRank
+      canManageBasedOnRank,
+      serverCheckReason: manageCheck?.reason,
     });
   }
 
@@ -800,18 +828,18 @@ export default function MemberDetailsPage() {
                               primaryTeamId: memberData?.primaryTeamId ?? undefined,
                             });
                           }}
-                          disabled={isActingOnSelf || !canManageBasedOnRank}
+                          disabled={isActingOnSelf || !canEditMember}
                         >
                           <Edit className="h-4 w-4 mr-2" />
                           Edit Member
                         </Button>
                       </div>
                     </TooltipTrigger>
-                    {(isActingOnSelf || !canManageBasedOnRank) && (
+                    {(isActingOnSelf || !canEditMember) && (
                       <TooltipContent>
                         {isActingOnSelf
                           ? <p>You cannot manage yourself.</p>
-                          : <p>You cannot manage a member of an equal or higher rank.</p>}
+                          : <p>{manageCheck?.reason || promoteCheck?.reason || demoteCheck?.reason || disciplineCheck?.reason || removeCheck?.reason || deleteCheck?.reason || 'Actions are disabled for this member.'}</p>}
                       </TooltipContent>
                     )}
                   </Tooltip>
@@ -914,7 +942,7 @@ export default function MemberDetailsPage() {
                             variant="destructive"
                             className="mt-4 w-full"
                             onClick={() => setIsDeleteDialogOpen(true)}
-                            disabled={deleteMemberMutation.isPending}
+                            disabled={deleteMemberMutation.isPending || !(deleteCheck?.can ?? false)}
                           >
                             <Trash2 className="h-4 w-4 mr-2" />
                             {deleteMemberMutation.isPending ? 'Deleting...' : 'Delete Member'}
@@ -1486,7 +1514,7 @@ export default function MemberDetailsPage() {
                                     variant="outline"
                                     size="sm"
                                     className="justify-start"
-                                    disabled={promoteMutation.isPending}
+                                    disabled={promoteMutation.isPending || !(promoteCheck?.can ?? false)}
                                     onClick={() => {
                                       if (!memberData.rankId) {
                                         // Member has no rank, promote to lowest rank
@@ -1527,7 +1555,7 @@ export default function MemberDetailsPage() {
                                     variant="outline"
                                     size="sm"
                                     className="justify-start"
-                                    disabled={demoteMutation.isPending}
+                                    disabled={demoteMutation.isPending || !(demoteCheck?.can ?? false)}
                                     onClick={() => {
                                       const currentRankLevel = memberData.rankLevel ?? 0;
                                       // Sort ranks by level and find the next lower rank
@@ -1555,7 +1583,7 @@ export default function MemberDetailsPage() {
                                     variant="outline"
                                     size="sm"
                                     className="justify-start text-gray-600 hover:text-gray-700"
-                                    disabled={updateMemberMutation.isPending}
+                                    disabled={updateMemberMutation.isPending || !(demoteCheck?.can ?? false)}
                                     onClick={() => {
                                       updateMemberMutation.mutate({
                                         id: memberId,
@@ -1572,7 +1600,7 @@ export default function MemberDetailsPage() {
                                   variant="destructive"
                                   size="sm"
                                   className="justify-start"
-                                  disabled={removeMemberMutation.isPending}
+                                  disabled={removeMemberMutation.isPending || !(removeCheck?.can ?? false)}
                                   onClick={() => setIsRemoveDialogOpen(true)}
                                 >
                                   <Trash2 className="h-4 w-4 mr-2" />
@@ -1586,7 +1614,7 @@ export default function MemberDetailsPage() {
                                       size="sm"
                                       className="justify-start text-orange-600 hover:text-orange-700"
                                       onClick={() => openDisciplineDialog('warn')}
-                                      disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                                      disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending || !(disciplineCheck?.can ?? false)}
                                     >
                                       <AlertTriangle className="h-4 w-4 mr-2" />
                                       {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Issue Warning"}
@@ -1597,7 +1625,7 @@ export default function MemberDetailsPage() {
                                       size="sm"
                                       className="justify-start text-red-600 hover:text-red-700"
                                       onClick={() => openDisciplineDialog('suspend')}
-                                      disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending}
+                                      disabled={disciplineIssueMutation.isPending || updateMemberMutation.isPending || !(disciplineCheck?.can ?? false)}
                                     >
                                       <Ban className="h-4 w-4 mr-2" />
                                       {disciplineIssueMutation.isPending || updateMemberMutation.isPending ? "Processing..." : "Suspend"}
@@ -1645,7 +1673,7 @@ export default function MemberDetailsPage() {
                                         });
                                       }
                                     }}
-                                    disabled={disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                                    disabled={disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading || !(dismissDisciplineCheck?.can ?? false)}
                                   >
                                     <CheckCircle className="h-4 w-4 mr-2" />
                                     {(disciplineDismissMutation.isPending || endLoaMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "End LOA Early"}
@@ -1679,7 +1707,7 @@ export default function MemberDetailsPage() {
                                         });
                                       }
                                     }}
-                                    disabled={disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading}
+                                    disabled={disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending || disciplinaryLoading || !(dismissDisciplineCheck?.can ?? false)}
                                   >
                                     <CheckCircle className="h-4 w-4 mr-2" />
                                     {(disciplineDismissMutation.isPending || unsuspendMutation.isPending || updateMemberMutation.isPending) ? "Processing..." : "Unsuspend Member"}
@@ -1690,9 +1718,9 @@ export default function MemberDetailsPage() {
                               <div className="p-3 text-sm bg-muted text-muted-foreground rounded-md flex items-center gap-2">
                                 <Info className="h-4 w-4 flex-shrink-0" />
                                 <span>
-                                  {isActingOnSelf 
+                                  {isActingOnSelf
                                     ? "Actions are not available for your own profile."
-                                    : "Actions are disabled for members of an equal or higher rank."}
+                                    : (manageCheck?.reason || promoteCheck?.reason || demoteCheck?.reason || disciplineCheck?.reason || removeCheck?.reason || deleteCheck?.reason || "Actions are disabled for this member.")}
                                 </span>
                               </div>
                             )}
@@ -1833,7 +1861,7 @@ export default function MemberDetailsPage() {
                         <Button
                             variant="destructive"
                             onClick={handleDeleteMember}
-                            disabled={deleteMemberMutation.isPending}
+                            disabled={deleteMemberMutation.isPending || !(deleteCheck?.can ?? false)}
                         >
                             {deleteMemberMutation.isPending ? (
                                 <>
@@ -1871,7 +1899,7 @@ export default function MemberDetailsPage() {
                   <Button
                     variant="destructive"
                     onClick={handleRemoveMember}
-                    disabled={removeMemberMutation.isPending}
+                    disabled={removeMemberMutation.isPending || !(removeCheck?.can ?? false)}
                   >
                     {removeMemberMutation.isPending ? (
                       <>

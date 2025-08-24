@@ -49,6 +49,7 @@ export default function AdvancedOperationsPage() {
   const [isBulkUpdateDialogOpen, setIsBulkUpdateDialogOpen] = useState(false);
   const [isBulkPromoteDialogOpen, setIsBulkPromoteDialogOpen] = useState(false);
   const [selectedMembers, setSelectedMembers] = useState<number[]>([]);
+  const trpcUtils = api.useUtils();
 
   // Search form state
   const [searchForm, setSearchForm] = useState({
@@ -169,11 +170,33 @@ export default function AdvancedOperationsPage() {
       return;
     }
 
-    bulkUpdateMutation.mutate({
-      memberIds: selectedMembers,
-      updates,
-      reason: bulkUpdateForm.reason,
-    });
+    // Server-side authorization preflight using canActOnMember
+    (async () => {
+      try {
+        const checks = await Promise.all(selectedMembers.map(id => 
+          trpcUtils.dept.user.info.canActOnMember.fetch({
+            departmentId,
+            targetMemberId: id,
+            action: 'manage',
+          })
+        ));
+        const blocked = checks
+          .map((res, idx) => ({ id: selectedMembers[idx]!, res }))
+          .filter(x => !x.res.can);
+        if (blocked.length > 0) {
+          const details = blocked.slice(0, 5).map(b => `#${b.id}: ${b.res.reason ?? 'Not allowed'}`).join('\n');
+          toast.error(`You cannot update ${blocked.length} selected member(s).\n${details}${blocked.length > 5 ? '\n…' : ''}`);
+          return;
+        }
+        bulkUpdateMutation.mutate({
+          memberIds: selectedMembers,
+          updates,
+          reason: bulkUpdateForm.reason,
+        });
+      } catch (e) {
+        toast.error('Authorization check failed. Please try again.');
+      }
+    })();
   };
 
   const handleBulkPromote = () => {
@@ -187,12 +210,34 @@ export default function AdvancedOperationsPage() {
       return;
     }
 
-    bulkPromoteMutation.mutate({
-      memberIds: selectedMembers,
-      newRankId: parseInt(bulkPromoteForm.newRankId),
-      reason: bulkPromoteForm.reason,
-      effectiveDate: new Date(bulkPromoteForm.effectiveDate!),
-    });
+    // Server-side authorization preflight using canActOnMember (promote)
+    (async () => {
+      try {
+        const checks = await Promise.all(selectedMembers.map(id => 
+          trpcUtils.dept.user.info.canActOnMember.fetch({
+            departmentId,
+            targetMemberId: id,
+            action: 'promote',
+          })
+        ));
+        const blocked = checks
+          .map((res, idx) => ({ id: selectedMembers[idx]!, res }))
+          .filter(x => !x.res.can);
+        if (blocked.length > 0) {
+          const details = blocked.slice(0, 5).map(b => `#${b.id}: ${b.res.reason ?? 'Not allowed'}`).join('\n');
+          toast.error(`You cannot promote ${blocked.length} selected member(s).\n${details}${blocked.length > 5 ? '\n…' : ''}`);
+          return;
+        }
+        bulkPromoteMutation.mutate({
+          memberIds: selectedMembers,
+          newRankId: parseInt(bulkPromoteForm.newRankId),
+          reason: bulkPromoteForm.reason,
+          effectiveDate: new Date(bulkPromoteForm.effectiveDate!),
+        });
+      } catch (e) {
+        toast.error('Authorization check failed. Please try again.');
+      }
+    })();
   };
 
   const handleMemberSelect = (memberId: number, checked: boolean) => {

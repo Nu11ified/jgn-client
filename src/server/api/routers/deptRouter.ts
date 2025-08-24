@@ -2617,8 +2617,9 @@ export const deptRouter = createTRPCRouter({
               memberUpdateData.isActive = updateData.isActive;
             }
 
-            // Check if member is being moved to inactive status and remove Discord roles
-            if (updateData.status && ['inactive', 'suspended', 'blacklisted', 'leave_of_absence'].includes(updateData.status)) {
+            // Check if member is being moved to inactive-like status and remove Discord roles
+            // Note: LOA should NOT remove Discord roles (consistent with disciplinary route)
+            if (updateData.status && ['inactive', 'suspended', 'blacklisted'].includes(updateData.status)) {
               console.log(`🗑️ Member status changing to ${updateData.status}, removing Discord roles`);
               const roleRemovalResult = await removeDiscordRolesForInactiveMember(
                 currentMember.discordId,
@@ -3985,7 +3986,8 @@ export const deptRouter = createTRPCRouter({
 
 
           // 7. Handle status/isActive changes regarding Discord roles (adapted from admin)
-          if (finalUpdateData.status && ['inactive', 'suspended', 'blacklisted', 'leave_of_absence'].includes(finalUpdateData.status) && finalUpdateData.status !== targetMember.status) {
+          // LOA should NOT remove roles here either to match disciplinary behavior
+          if (finalUpdateData.status && ['inactive', 'suspended', 'blacklisted'].includes(finalUpdateData.status) && finalUpdateData.status !== targetMember.status) {
             console.log(`[User Update] Member ${targetMember.id} status changing to ${finalUpdateData.status}, removing Discord roles`);
             // Background removal, don't block on this
             void removeDiscordRolesForInactiveMember(targetMember.discordId, targetMember.departmentId).catch(console.error);

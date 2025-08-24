@@ -35,7 +35,8 @@ export default function DepartmentRosterPage() {
   const departmentId = parseInt(params.departmentId as string);
 
   // Filters state
-  const [statusFilter, setStatusFilter] = useState<MemberStatus[]>(['active']);
+  // Default to showing all statuses to avoid hiding LOA/similar by default
+  const [statusFilter, setStatusFilter] = useState<MemberStatus[]>([]);
   const [rankFilter, setRankFilter] = useState<number[]>([]);
   const [teamFilter, setTeamFilter] = useState<number[]>([]);
   const [includeInactive, setIncludeInactive] = useState(false);

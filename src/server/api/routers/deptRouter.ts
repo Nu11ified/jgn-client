@@ -529,52 +529,20 @@ function assertCanActOnMember({ actorDiscordId, actorRankLevel, targetDiscordId,
   }
 }
 
-// Determine rank direction per department (cache for short-lived runs)
-// desc = larger level is more senior; asc = smaller level is more senior
-const rankDirectionCache = new Map<number, "asc" | "desc">();
-async function getDepartmentRankDirection(departmentId: number): Promise<"asc" | "desc"> {
-  const cached = rankDirectionCache.get(departmentId);
-  if (cached) return cached;
-
-  // Look at ranks and use permissions to infer top rank placement
-  const ranks = await postgrestDb
-    .select({ level: deptSchema.departmentRanks.level, permissions: deptSchema.departmentRanks.permissions })
-    .from(deptSchema.departmentRanks)
-    .where(eq(deptSchema.departmentRanks.departmentId, departmentId));
-
-  if (ranks.length === 0) {
-    rankDirectionCache.set(departmentId, "desc");
-    return "desc";
-  }
-  const levels = ranks.map(r => r.level).filter((l): l is number => typeof l === "number");
-  const minLevel = Math.min(...levels);
-  const maxLevel = Math.max(...levels);
-  // Prefer manage_department to infer top rank
-  const topRanks = ranks.filter(r => r.permissions?.manage_department === true);
-  const probeLevels = (topRanks.length > 0 ? topRanks : ranks.filter(r => r.permissions?.manage_members === true)).map(r => r.level);
-  const hasMax = probeLevels.some(l => l === maxLevel);
-  const hasMin = probeLevels.some(l => l === minLevel);
-  const direction: "asc" | "desc" = hasMax && !hasMin ? "desc" : hasMin && !hasMax ? "asc" : "desc";
-  rankDirectionCache.set(departmentId, direction);
-  return direction;
-}
-
-// Async, department-aware checker that respects inferred rank direction
+// Async checker enforcing consistent rank ordering: larger level = more senior
+// Aligns with schema: departmentRanks.level (higher = more senior)
 async function ensureCanActOnMember(params: { departmentId: number; actorDiscordId: string; actorRankLevel: number | null | undefined; targetDiscordId: string; targetRankLevel: number | null | undefined; actionName: string; }) {
-  const { departmentId, actorDiscordId, actorRankLevel, targetDiscordId, targetRankLevel, actionName } = params;
+  const { actorDiscordId, actorRankLevel, targetDiscordId, targetRankLevel, actionName } = params;
   if (actorDiscordId === targetDiscordId) {
     throw new TRPCError({ code: "FORBIDDEN", message: `You cannot ${actionName} for yourself.` });
   }
   if (actorRankLevel == null) {
     throw new TRPCError({ code: "FORBIDDEN", message: `Your department rank is not assigned. Please contact an administrator.` });
   }
-  if (targetRankLevel == null) return; // target treated as lowest
-
-  const dir = await getDepartmentRankDirection(departmentId);
-  const isForbidden = dir === "desc"
-    ? targetRankLevel >= actorRankLevel
-    : targetRankLevel <= actorRankLevel;
-  if (isForbidden) {
+  // If target has no rank, treat as lowest rank and allow action
+  if (targetRankLevel == null) return;
+  // Higher numeric level = more senior. Block equal or higher target.
+  if (targetRankLevel >= actorRankLevel) {
     throw new TRPCError({ code: "FORBIDDEN", message: `You cannot ${actionName} for someone of equal or higher rank.` });
   }
 }

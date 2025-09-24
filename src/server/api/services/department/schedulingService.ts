@@ -584,8 +584,10 @@ export async function getShiftStatistics(
             else if (shift.status === "no_show") noShowShifts++;
 
             // Count by type
-            if (shiftsByType.hasOwnProperty(shift.shiftType)) {
-                shiftsByType[shift.shiftType]++;
+            if (Object.prototype.hasOwnProperty.call(shiftsByType, shift.shiftType)) {
+                shiftsByType[shift.shiftType] = (shiftsByType[shift.shiftType] ?? 0) + 1;
+            } else {
+                shiftsByType[shift.shiftType] = 1;
             }
 
             // Calculate shift length using actual times if available, otherwise scheduled times

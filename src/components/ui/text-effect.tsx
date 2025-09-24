@@ -1,12 +1,8 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import {
-  AnimatePresence,
-  motion,
-  TargetAndTransition,
-  Variants,
-} from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
+import type { TargetAndTransition, Transition, Variants } from 'framer-motion';
 import React from 'react';
 
 type PresetType = 'blur' | 'shake' | 'scale' | 'fade' | 'slide';
@@ -181,19 +177,20 @@ export function TextEffect({
 
   const stagger = defaultStaggerTimes[per];
 
+  const visibleVariant = (containerVariants.visible ?? {}) as TargetAndTransition;
+  const existingTransition = (visibleVariant.transition ?? {}) as Transition;
+
   const delayedContainerVariants: Variants = {
-    hidden: containerVariants.hidden,
+    hidden: containerVariants.hidden ?? {},
     visible: {
-      ...containerVariants.visible,
+      ...visibleVariant,
       transition: {
-        ...(containerVariants.visible as TargetAndTransition)?.transition,
-        staggerChildren:
-          (containerVariants.visible as TargetAndTransition)?.transition
-            ?.staggerChildren || stagger,
+        ...existingTransition,
+        staggerChildren: existingTransition.staggerChildren ?? stagger,
         delayChildren: delay,
       },
     },
-    exit: containerVariants.exit,
+    ...(containerVariants.exit ? { exit: containerVariants.exit } : {}),
   };
 
   return (

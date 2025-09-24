@@ -10,6 +10,15 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { 
   ArrowLeft, 
   Search,
@@ -39,6 +48,7 @@ export default function DepartmentRosterPage() {
   const [statusFilter, setStatusFilter] = useState<MemberStatus[]>([]);
   const [rankFilter, setRankFilter] = useState<number[]>([]);
   const [teamFilter, setTeamFilter] = useState<number[]>([]);
+  const [excludedRankIds, setExcludedRankIds] = useState<number[]>([]);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   
@@ -72,6 +82,7 @@ export default function DepartmentRosterPage() {
     includeInactive,
     statusFilter: statusFilter.length > 0 ? statusFilter : undefined,
     rankFilter: rankFilter.length > 0 ? rankFilter : undefined,
+    excludeRankIds: excludedRankIds.length > 0 ? excludedRankIds : undefined,
     teamFilter: teamFilter.length > 0 ? teamFilter : undefined,
     limit,
     offset: page * limit,
@@ -83,6 +94,12 @@ export default function DepartmentRosterPage() {
   // Get weekly hours for visible members (only if user has timeclock permissions)
   const memberIds = rosterData?.members.map(member => member.id) ?? [];
   const hasTimeclockPermission = (canViewTimeclock?.hasPermission ?? false) || (canManageTimeclock?.hasPermission ?? false);
+  const excludedRankNames = excludedRankIds.length > 0
+    ? (departmentInfo?.ranks?.filter((rank) => excludedRankIds.includes(rank.id)).map((rank) => rank.name) ?? [])
+    : [];
+  const excludedRankSummary = excludedRankNames.length === 0
+    ? "No ranks excluded"
+    : `${excludedRankNames.slice(0, 2).join(', ')}${excludedRankNames.length > 2 ? ` +${excludedRankNames.length - 2} more` : ''}`;
   
   const { data: weeklyHoursData, isLoading: weeklyHoursLoading } = api.dept.user.timeclock.getBatchWeeklyHours.useQuery({
     departmentId,
@@ -376,6 +393,58 @@ export default function DepartmentRosterPage() {
                   Include Inactive
                 </label>
               </div>
+
+              {/* Exclude Ranks */}
+              {departmentInfo?.ranks && departmentInfo.ranks.length > 0 && (
+                <div className="md:col-span-2">
+                  <label className="text-sm font-medium mb-2 block">Exclude Ranks from Count</label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" className="w-full justify-between">
+                        <span className="truncate text-left">
+                          {excludedRankSummary}
+                        </span>
+                        {excludedRankIds.length > 0 && (
+                          <Badge variant="secondary" className="ml-2">
+                            {excludedRankIds.length}
+                          </Badge>
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-64" align="start">
+                      <DropdownMenuLabel>Select ranks to exclude</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {departmentInfo.ranks.map((rank) => (
+                        <DropdownMenuCheckboxItem
+                          key={rank.id}
+                          checked={excludedRankIds.includes(rank.id)}
+                          onCheckedChange={(checked) => {
+                            setExcludedRankIds((prev) => {
+                              if (checked === true) {
+                                if (prev.includes(rank.id)) return prev;
+                                return [...prev, rank.id];
+                              }
+                              return prev.filter((id) => id !== rank.id);
+                            });
+                            setPage(0);
+                          }}
+                        >
+                          {rank.name}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          setExcludedRankIds([]);
+                          setPage(0);
+                        }}
+                      >
+                        Clear selection
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

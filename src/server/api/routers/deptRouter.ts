@@ -2959,7 +2959,12 @@ export const deptRouter = createTRPCRouter({
               postgrestDb
                 .select({ count: sql`count(*)` })
                 .from(deptSchema.departmentMembers)
-                .where(eq(deptSchema.departmentMembers.departmentId, input.departmentId)),
+                .where(
+                  and(
+                    eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                    eq(deptSchema.departmentMembers.isActive, true)
+                  )
+                ),
 
               // Active members
               postgrestDb
@@ -4542,6 +4547,7 @@ export const deptRouter = createTRPCRouter({
               }
 
               const permissions = requester[0]!.permissions!;
+
               if (!permissions.view_all_members) {
                 throw new TRPCError({
                   code: "FORBIDDEN",
@@ -6375,6 +6381,10 @@ export const deptRouter = createTRPCRouter({
                 countConditions.push(inArray(deptSchema.departmentMembers.rankId, input.rankFilter));
               }
 
+              if (input.excludeRankIds && input.excludeRankIds.length > 0) {
+                countConditions.push(not(inArray(deptSchema.departmentMembers.rankId, input.excludeRankIds)));
+              }
+
               if (!permissions.view_all_members) {
                 if (input.teamFilter && input.teamFilter.length > 0) {
                   countConditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
@@ -6760,7 +6770,12 @@ export const deptRouter = createTRPCRouter({
               postgrestDb
                 .select({ count: sql`count(*)` })
                 .from(deptSchema.departmentMembers)
-                .where(eq(deptSchema.departmentMembers.departmentId, input.departmentId)),
+                .where(
+                  and(
+                    eq(deptSchema.departmentMembers.departmentId, input.departmentId),
+                    eq(deptSchema.departmentMembers.isActive, true)
+                  )
+                ),
 
               // Active members
               postgrestDb

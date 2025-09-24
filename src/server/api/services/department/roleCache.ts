@@ -61,13 +61,13 @@ export const getDepartmentRoleMap = async (departmentId: number): Promise<Depart
   const rankRoles: RankRoleEntry[] = ranks.map((r, idx) => ({
     rankId: r.id,
     discordRoleId: r.discordRoleId ?? "",
-    serverId: r.discordRoleId ? rankServerIds[idx] : null,
+    serverId: r.discordRoleId ? rankServerIds[idx] ?? null : null,
   }));
 
   const teamRoles: TeamRoleEntry[] = teams.map((t, idx) => ({
     teamId: t.id,
     discordRoleId: t.discordRoleId ?? "",
-    serverId: t.discordRoleId ? teamServerIds[idx] : null,
+    serverId: t.discordRoleId ? teamServerIds[idx] ?? null : null,
   }));
 
   const byRankId = new Map<number, { discordRoleId: string | null; serverId: string | null }>();
@@ -87,5 +87,4 @@ export const getDepartmentRoleMap = async (departmentId: number): Promise<Depart
   deptRoleCache.set(departmentId, map);
   return map;
 };
-
 

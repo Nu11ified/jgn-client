@@ -401,13 +401,13 @@ export async function getIncidentStatistics(
 
         for (const incident of incidents) {
             // Count by type
-            incidentsByType[incident.incidentType]++;
-            
+            incidentsByType[incident.incidentType] = (incidentsByType[incident.incidentType] ?? 0) + 1;
+
             // Count by severity
-            incidentsBySeverity[incident.severity]++;
-            
+            incidentsBySeverity[incident.severity] = (incidentsBySeverity[incident.severity] ?? 0) + 1;
+
             // Count by status
-            incidentsByStatus[incident.status]++;
+            incidentsByStatus[incident.status] = (incidentsByStatus[incident.status] ?? 0) + 1;
 
             // Count locations
             if (incident.location) {

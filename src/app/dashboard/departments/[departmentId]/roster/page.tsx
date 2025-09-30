@@ -46,8 +46,8 @@ export default function DepartmentRosterPage() {
   // Filters state
   // Default to showing all statuses to avoid hiding LOA/similar by default
   const [statusFilter, setStatusFilter] = useState<MemberStatus[]>([]);
-  const [rankFilter, setRankFilter] = useState<number[]>([]);
-  const [teamFilter, setTeamFilter] = useState<number[]>([]);
+  const [rankFilter, setRankFilter] = useState<(number | null)[]>([]);
+  const [teamFilter, setTeamFilter] = useState<(number | null)[]>([]);
   const [excludedRankIds, setExcludedRankIds] = useState<number[]>([]);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -328,13 +328,22 @@ export default function DepartmentRosterPage() {
               <div>
                 <label className="text-sm font-medium mb-2 block">Rank</label>
                 <Select
-                  value={rankFilter.length === 1 ? rankFilter[0]?.toString() : ""}
+                  value={
+                    rankFilter.length === 0 
+                      ? "" 
+                      : rankFilter[0] === null 
+                        ? "none" 
+                        : rankFilter[0]?.toString()
+                  }
                   onValueChange={(value) => {
                     if (value === "all") {
                       setRankFilter([]);
+                    } else if (value === "none") {
+                      setRankFilter([null as any]);
                     } else {
                       setRankFilter([parseInt(value)]);
                     }
+                    setPage(0); // Reset pagination when filter changes
                   }}
                 >
                   <SelectTrigger>
@@ -356,13 +365,22 @@ export default function DepartmentRosterPage() {
               <div>
                 <label className="text-sm font-medium mb-2 block">Team</label>
                 <Select
-                  value={teamFilter.length === 1 ? teamFilter[0]?.toString() : ""}
+                  value={
+                    teamFilter.length === 0 
+                      ? "" 
+                      : teamFilter[0] === null 
+                        ? "none" 
+                        : teamFilter[0]?.toString()
+                  }
                   onValueChange={(value) => {
                     if (value === "all") {
                       setTeamFilter([]);
+                    } else if (value === "none") {
+                      setTeamFilter([null as any]);
                     } else {
                       setTeamFilter([parseInt(value)]);
                     }
+                    setPage(0); // Reset pagination when filter changes
                   }}
                 >
                   <SelectTrigger>

@@ -6223,9 +6223,9 @@ export const deptRouter = createTRPCRouter({
           departmentId: z.number().int().positive(),
           includeInactive: z.boolean().default(false),
           statusFilter: z.array(deptSchema.departmentMemberStatusEnum).optional(),
-          rankFilter: z.array(z.number().int().positive()).optional(),
+          rankFilter: z.array(z.number().int().positive().nullable()).optional(),
           excludeRankIds: z.array(z.number().int().positive()).optional(),
-          teamFilter: z.array(z.number().int().positive()).optional(),
+          teamFilter: z.array(z.number().int().positive().nullable()).optional(),
           // Add member ID filter for finding specific members
           memberIdFilter: z.number().int().positive().optional(),
           limit: z.number().int().min(1).max(100).default(50),
@@ -6291,9 +6291,26 @@ export const deptRouter = createTRPCRouter({
               conditions.push(inArray(deptSchema.departmentMembers.status, input.statusFilter));
             }
 
-            // Rank filter
+            // Rank filter - handle both specific ranks and NULL (no rank)
             if (input.rankFilter && input.rankFilter.length > 0) {
-              conditions.push(inArray(deptSchema.departmentMembers.rankId, input.rankFilter));
+              const hasNull = input.rankFilter.includes(null);
+              const rankIds = input.rankFilter.filter((id): id is number => id !== null);
+              
+              if (hasNull && rankIds.length > 0) {
+                // Filter for both NULL and specific rank IDs
+                conditions.push(
+                  or(
+                    isNull(deptSchema.departmentMembers.rankId),
+                    inArray(deptSchema.departmentMembers.rankId, rankIds)
+                  )!
+                );
+              } else if (hasNull) {
+                // Filter for only NULL (no rank)
+                conditions.push(isNull(deptSchema.departmentMembers.rankId));
+              } else if (rankIds.length > 0) {
+                // Filter for only specific rank IDs
+                conditions.push(inArray(deptSchema.departmentMembers.rankId, rankIds));
+              }
             }
 
             // Exclude ranks
@@ -6304,8 +6321,25 @@ export const deptRouter = createTRPCRouter({
             // Team filter - if user can only view team members, restrict to their teams
             if (!permissions.view_all_members) {
               if (input.teamFilter && input.teamFilter.length > 0) {
-                // Further restrict to intersection of user's teams and requested teams
-                conditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+                // Handle NULL (no team) in filter
+                const hasNull = input.teamFilter.includes(null);
+                const teamIds = input.teamFilter.filter((id): id is number => id !== null);
+                
+                if (hasNull && teamIds.length > 0) {
+                  // Filter for both NULL and specific team IDs
+                  conditions.push(
+                    or(
+                      isNull(deptSchema.departmentMembers.primaryTeamId),
+                      inArray(deptSchema.departmentMembers.primaryTeamId, teamIds)
+                    )!
+                  );
+                } else if (hasNull) {
+                  // Filter for only NULL (no team)
+                  conditions.push(isNull(deptSchema.departmentMembers.primaryTeamId));
+                } else if (teamIds.length > 0) {
+                  // Filter for only specific team IDs
+                  conditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, teamIds));
+                }
               } else {
                 // Only show members in user's primary team
                 if (requester[0]!.primaryTeamId !== null) {
@@ -6316,7 +6350,25 @@ export const deptRouter = createTRPCRouter({
                 }
               }
             } else if (input.teamFilter && input.teamFilter.length > 0) {
-              conditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+              // Handle NULL (no team) in filter for users with view_all_members permission
+              const hasNull = input.teamFilter.includes(null);
+              const teamIds = input.teamFilter.filter((id): id is number => id !== null);
+              
+              if (hasNull && teamIds.length > 0) {
+                // Filter for both NULL and specific team IDs
+                conditions.push(
+                  or(
+                    isNull(deptSchema.departmentMembers.primaryTeamId),
+                    inArray(deptSchema.departmentMembers.primaryTeamId, teamIds)
+                  )!
+                );
+              } else if (hasNull) {
+                // Filter for only NULL (no team)
+                conditions.push(isNull(deptSchema.departmentMembers.primaryTeamId));
+              } else if (teamIds.length > 0) {
+                // Filter for only specific team IDs
+                conditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, teamIds));
+              }
             }
 
             // Add cursor-based pagination if cursor is provided
@@ -6377,17 +6429,47 @@ export const deptRouter = createTRPCRouter({
                 countConditions.push(inArray(deptSchema.departmentMembers.status, input.statusFilter));
               }
 
+              // Rank filter - handle both specific ranks and NULL (no rank)
               if (input.rankFilter && input.rankFilter.length > 0) {
-                countConditions.push(inArray(deptSchema.departmentMembers.rankId, input.rankFilter));
+                const hasNull = input.rankFilter.includes(null);
+                const rankIds = input.rankFilter.filter((id): id is number => id !== null);
+                
+                if (hasNull && rankIds.length > 0) {
+                  countConditions.push(
+                    or(
+                      isNull(deptSchema.departmentMembers.rankId),
+                      inArray(deptSchema.departmentMembers.rankId, rankIds)
+                    )!
+                  );
+                } else if (hasNull) {
+                  countConditions.push(isNull(deptSchema.departmentMembers.rankId));
+                } else if (rankIds.length > 0) {
+                  countConditions.push(inArray(deptSchema.departmentMembers.rankId, rankIds));
+                }
               }
 
               if (input.excludeRankIds && input.excludeRankIds.length > 0) {
                 countConditions.push(not(inArray(deptSchema.departmentMembers.rankId, input.excludeRankIds)));
               }
 
+              // Team filter - handle both specific teams and NULL (no team)
               if (!permissions.view_all_members) {
                 if (input.teamFilter && input.teamFilter.length > 0) {
-                  countConditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+                  const hasNull = input.teamFilter.includes(null);
+                  const teamIds = input.teamFilter.filter((id): id is number => id !== null);
+                  
+                  if (hasNull && teamIds.length > 0) {
+                    countConditions.push(
+                      or(
+                        isNull(deptSchema.departmentMembers.primaryTeamId),
+                        inArray(deptSchema.departmentMembers.primaryTeamId, teamIds)
+                      )!
+                    );
+                  } else if (hasNull) {
+                    countConditions.push(isNull(deptSchema.departmentMembers.primaryTeamId));
+                  } else if (teamIds.length > 0) {
+                    countConditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, teamIds));
+                  }
                 } else {
                   if (requester[0]!.primaryTeamId !== null) {
                     countConditions.push(eq(deptSchema.departmentMembers.primaryTeamId, requester[0]!.primaryTeamId));
@@ -6396,7 +6478,21 @@ export const deptRouter = createTRPCRouter({
                   }
                 }
               } else if (input.teamFilter && input.teamFilter.length > 0) {
-                countConditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+                const hasNull = input.teamFilter.includes(null);
+                const teamIds = input.teamFilter.filter((id): id is number => id !== null);
+                
+                if (hasNull && teamIds.length > 0) {
+                  countConditions.push(
+                    or(
+                      isNull(deptSchema.departmentMembers.primaryTeamId),
+                      inArray(deptSchema.departmentMembers.primaryTeamId, teamIds)
+                    )!
+                  );
+                } else if (hasNull) {
+                  countConditions.push(isNull(deptSchema.departmentMembers.primaryTeamId));
+                } else if (teamIds.length > 0) {
+                  countConditions.push(inArray(deptSchema.departmentMembers.primaryTeamId, teamIds));
+                }
               }
 
               const totalCountResult = await postgrestDb
@@ -6423,18 +6519,67 @@ export const deptRouter = createTRPCRouter({
             const facetConditionsBase = [eq(deptSchema.departmentMembers.departmentId, input.departmentId)];
             if (!input.includeInactive) facetConditionsBase.push(eq(deptSchema.departmentMembers.isActive, true));
             if (input.statusFilter && input.statusFilter.length > 0) facetConditionsBase.push(inArray(deptSchema.departmentMembers.status, input.statusFilter));
-            if (input.rankFilter && input.rankFilter.length > 0) facetConditionsBase.push(inArray(deptSchema.departmentMembers.rankId, input.rankFilter));
+            
+            // Rank filter - handle both specific ranks and NULL (no rank)
+            if (input.rankFilter && input.rankFilter.length > 0) {
+              const hasNull = input.rankFilter.includes(null);
+              const rankIds = input.rankFilter.filter((id): id is number => id !== null);
+              
+              if (hasNull && rankIds.length > 0) {
+                facetConditionsBase.push(
+                  or(
+                    isNull(deptSchema.departmentMembers.rankId),
+                    inArray(deptSchema.departmentMembers.rankId, rankIds)
+                  )!
+                );
+              } else if (hasNull) {
+                facetConditionsBase.push(isNull(deptSchema.departmentMembers.rankId));
+              } else if (rankIds.length > 0) {
+                facetConditionsBase.push(inArray(deptSchema.departmentMembers.rankId, rankIds));
+              }
+            }
+            
             if (input.excludeRankIds && input.excludeRankIds.length > 0) facetConditionsBase.push(not(inArray(deptSchema.departmentMembers.rankId, input.excludeRankIds)));
+            
+            // Team filter - handle both specific teams and NULL (no team)
             if (!permissions.view_all_members) {
               if (input.teamFilter && input.teamFilter.length > 0) {
-                facetConditionsBase.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+                const hasNull = input.teamFilter.includes(null);
+                const teamIds = input.teamFilter.filter((id): id is number => id !== null);
+                
+                if (hasNull && teamIds.length > 0) {
+                  facetConditionsBase.push(
+                    or(
+                      isNull(deptSchema.departmentMembers.primaryTeamId),
+                      inArray(deptSchema.departmentMembers.primaryTeamId, teamIds)
+                    )!
+                  );
+                } else if (hasNull) {
+                  facetConditionsBase.push(isNull(deptSchema.departmentMembers.primaryTeamId));
+                } else if (teamIds.length > 0) {
+                  facetConditionsBase.push(inArray(deptSchema.departmentMembers.primaryTeamId, teamIds));
+                }
               } else if (requester[0]!.primaryTeamId !== null) {
                 facetConditionsBase.push(eq(deptSchema.departmentMembers.primaryTeamId, requester[0]!.primaryTeamId));
               } else {
                 facetConditionsBase.push(sql`FALSE`);
               }
             } else if (input.teamFilter && input.teamFilter.length > 0) {
-              facetConditionsBase.push(inArray(deptSchema.departmentMembers.primaryTeamId, input.teamFilter));
+              const hasNull = input.teamFilter.includes(null);
+              const teamIds = input.teamFilter.filter((id): id is number => id !== null);
+              
+              if (hasNull && teamIds.length > 0) {
+                facetConditionsBase.push(
+                  or(
+                    isNull(deptSchema.departmentMembers.primaryTeamId),
+                    inArray(deptSchema.departmentMembers.primaryTeamId, teamIds)
+                  )!
+                );
+              } else if (hasNull) {
+                facetConditionsBase.push(isNull(deptSchema.departmentMembers.primaryTeamId));
+              } else if (teamIds.length > 0) {
+                facetConditionsBase.push(inArray(deptSchema.departmentMembers.primaryTeamId, teamIds));
+              }
             }
 
             const [allCountRes, activeCountRes, loaCountRes, inactiveCountRes, suspendedCountRes] = await Promise.all([

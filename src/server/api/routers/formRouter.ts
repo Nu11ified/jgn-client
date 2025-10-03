@@ -306,11 +306,41 @@ export const formRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ input }) => {
+      // First verify the form exists and is not deleted
+      const existingForm = await postgrestDb
+        .select({ id: forms.id })
+        .from(forms)
+        .where(and(eq(forms.id, input.id), isNull(forms.deletedAt)))
+        .limit(1)
+        .execute();
+
+      if (existingForm.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Form with ID ${input.id} not found or has been deleted.`,
+        });
+      }
+
+      // Destructure and explicitly exclude sensitive fields to prevent accidental modification
       const { id, ...updateData } = input;
+      
+      // Build safe update object - only include defined fields
+      const safeUpdateData: Partial<typeof updateData> = {};
+      if (updateData.title !== undefined) safeUpdateData.title = updateData.title;
+      if (updateData.description !== undefined) safeUpdateData.description = updateData.description;
+      if (updateData.questions !== undefined) safeUpdateData.questions = updateData.questions;
+      if (updateData.categoryId !== undefined) safeUpdateData.categoryId = updateData.categoryId;
+      if (updateData.accessRoleIds !== undefined) safeUpdateData.accessRoleIds = updateData.accessRoleIds;
+      if (updateData.reviewerRoleIds !== undefined) safeUpdateData.reviewerRoleIds = updateData.reviewerRoleIds;
+      if (updateData.finalApproverRoleIds !== undefined) safeUpdateData.finalApproverRoleIds = updateData.finalApproverRoleIds;
+      if (updateData.requiredReviewers !== undefined) safeUpdateData.requiredReviewers = updateData.requiredReviewers;
+      if (updateData.requiresFinalApproval !== undefined) safeUpdateData.requiresFinalApproval = updateData.requiresFinalApproval;
+
+      // Perform the update only on non-deleted forms
       const result = await postgrestDb
         .update(forms)
-        .set(updateData)
-        .where(eq(forms.id, id))
+        .set(safeUpdateData)
+        .where(and(eq(forms.id, id), isNull(forms.deletedAt)))
         .returning()
         .execute();
 
@@ -318,7 +348,7 @@ export const formRouter = createTRPCRouter({
       if (!updatedForm) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `Form with ID ${id} not found.`,
+          message: `Form with ID ${id} not found or was deleted during update.`,
         });
       }
       return updatedForm;

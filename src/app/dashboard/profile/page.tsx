@@ -23,7 +23,18 @@ export default async function UserProfilePage() {
   // Server-side data fetching using the server helper
   // The `api` here is from `@/trpc/server`
   try {
+    console.log('[PROFILE PAGE] Fetching user profile...');
     const user = await api.user.getMe();
+    console.log('[PROFILE PAGE] User profile fetched successfully:', user?.discordId);
+    
+    // Additional validation to ensure user has required fields
+    if (!user) {
+      throw new TRPCError({
+        code: 'NOT_FOUND',
+        message: 'User profile not found. Please ensure you are logged in.'
+      });
+    }
+    
     // `HydrateClient` is used to pass server-fetched data to client components,
     // ensuring that React Query on the client side starts with this data already cached.
     return (
@@ -47,6 +58,7 @@ export default async function UserProfilePage() {
       </HydrateClient>
     );
   } catch (error) {
+    console.error('[PROFILE PAGE ERROR]:', error);
     let title = "Error Loading Profile";
     let message = "An unknown error occurred while loading your profile.";
 

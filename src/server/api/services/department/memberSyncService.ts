@@ -112,6 +112,38 @@ export const syncMemberRolesAndCallsign = async (request: SyncMemberRequest): Pr
       if (failedChanges.length > 0) {
         console.warn(`⚠️ ${failedChanges.length}/${roleChanges.length} role changes failed`);
         failedChanges.forEach(failure => console.warn(`   - ${failure.message}`));
+        
+        // CRITICAL FIX: Check for critical rank role failures
+        const criticalFailures = failedChanges.filter(f => 
+          f.message?.toLowerCase().includes('rank')
+        );
+        
+        if (criticalFailures.length > 0) {
+          console.error(`🚨 CRITICAL: ${criticalFailures.length} rank role assignment(s) failed!`);
+          console.error('Initiating rollback of callsign and ID assignment...');
+          
+          // Rollback callsign and departmentIdNumber assignment
+          try {
+            await postgrestDb
+              .update(deptSchema.departmentMembers)
+              .set({ 
+                departmentIdNumber: null, 
+                callsign: null 
+              })
+              .where(eq(deptSchema.departmentMembers.id, memberId));
+            
+            console.log(`✅ Rollback completed for member ${memberId}`);
+          } catch (rollbackError) {
+            console.error(`❌ Rollback failed for member ${memberId}:`, rollbackError);
+          }
+          
+          // Throw error to prevent "success" response
+          const errorMessages = criticalFailures.map(f => f.message).join('; ');
+          throw new Error(
+            `Critical rank role assignment failed. Changes have been rolled back. ` +
+            `Details: ${errorMessages}`
+          );
+        }
       } else {
         console.log(`✅ All ${roleChanges.length} role changes completed successfully`);
       }

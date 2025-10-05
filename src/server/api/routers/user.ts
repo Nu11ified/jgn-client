@@ -82,6 +82,74 @@ export const userRouter = createTRPCRouter({
         handleApiError(error, "updateMyTsUid");
       }
     }),
+
+  // NEW: Manual TeamSpeak sync trigger
+  syncTeamSpeak: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      try {
+        // First, get user profile to check if ts_uid is set
+        const userResponse = await axios.get(
+          `${API_BASE_URL}/profile/me`,
+          {
+            headers: { "X-API-Key": ctx.dbUser.apiKey },
+          }
+        );
+        const user = userResponse.data as UserInDB;
+
+        if (!user.ts_uid || user.ts_uid.trim() === '') {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "TeamSpeak UID not set. Please update your profile with your TeamSpeak UID first.",
+          });
+        }
+
+        // Trigger sync by calling the sync endpoint with high priority
+        const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
+        if (!M2M_API_KEY) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Sync service not configured. Please contact an administrator.",
+          });
+        }
+
+        // Call the sync endpoint to queue this user for immediate sync
+        const syncResponse = await axios.post(
+          `${API_BASE_URL}/admin/sync/queue_user`,
+          {
+            discord_user_id: user.discord_id,
+            priority: 2, // High priority
+          },
+          {
+            headers: { "X-API-Key": M2M_API_KEY },
+            timeout: 5000,
+          }
+        );
+
+        console.log(`TeamSpeak sync queued for user ${user.discord_id}:`, syncResponse.data);
+
+        return {
+          success: true,
+          message: "TeamSpeak sync queued successfully. Your groups will be updated within 1-2 minutes.",
+          queuePosition: syncResponse.data?.queue_position ?? null,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        
+        if (axios.isAxiosError(error)) {
+          // Check if it's a 404 (sync endpoint doesn't exist)
+          if (error.response?.status === 404) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Sync service endpoint not available. The service may be temporarily down.",
+            });
+          }
+        }
+        
+        handleApiError(error, "syncTeamSpeak");
+      }
+    }),
 });
 
 // export type UserRouter = typeof userRouter; // Optional: for type inference on client 

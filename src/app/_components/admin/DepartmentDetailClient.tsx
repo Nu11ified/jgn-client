@@ -181,6 +181,22 @@ export default function DepartmentDetailClient({ department: initialDepartment }
   const [department, setDepartment] = useState(initialDepartment);
   const [activeTab, setActiveTab] = useState("overview");
   
+  // CRITICAL FIX: Add validation
+  if (!initialDepartment || !initialDepartment.id) {
+    console.error('[DEPT DETAIL] Invalid department data:', initialDepartment);
+    return (
+      <div className="container mx-auto py-10 px-4">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>
+            Invalid department data. Please try refreshing the page.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+  
   // Dialog states
   const [isViewMembersDialogOpen, setIsViewMembersDialogOpen] = useState(false);
   const [isAddMemberDialogOpen, setIsAddMemberDialogOpen] = useState(false);

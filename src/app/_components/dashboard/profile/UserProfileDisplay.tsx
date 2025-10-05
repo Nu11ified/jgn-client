@@ -41,6 +41,16 @@ const UserProfileDisplay: React.FC<UserProfileDisplayProps> = ({ user }) => {
     },
   });
 
+  // NEW: TeamSpeak sync mutation
+  const syncTeamSpeakMutation = api.user.syncTeamSpeak.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message ?? "TeamSpeak sync initiated successfully!");
+    },
+    onError: (error) => {
+      toast.error(error.message ?? "Failed to sync TeamSpeak. Please try again.");
+    },
+  });
+
   const { control, handleSubmit, formState: { errors, isSubmitting } } = useForm<UpdateTsUidFormValues>({
     resolver: zodResolver(updateTsUidSchema),
     defaultValues: {
@@ -97,7 +107,7 @@ const UserProfileDisplay: React.FC<UserProfileDisplayProps> = ({ user }) => {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="text-2xl">TeamSpeak Configuration</CardTitle>
-          <CardDescription>Update your TeamSpeak Unique ID (UID).</CardDescription>
+          <CardDescription>Update your TeamSpeak Unique ID (UID) and sync your groups.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
@@ -119,13 +129,33 @@ const UserProfileDisplay: React.FC<UserProfileDisplayProps> = ({ user }) => {
                 <p className="mt-1 text-sm text-destructive">{errors.ts_uid.message}</p>
               )}
             </div>
-            <Button type="submit" disabled={isSubmitting || updateTsUidMutation.isPending} className="w-full sm:w-auto">
-              {isSubmitting || updateTsUidMutation.isPending ? (
-                <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Updating...</>
-              ) : (
-                "Update TeamSpeak UID"
-              )}
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button type="submit" disabled={isSubmitting || updateTsUidMutation.isPending} className="w-full sm:w-auto">
+                {isSubmitting || updateTsUidMutation.isPending ? (
+                  <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Updating...</>
+                ) : (
+                  "Update TeamSpeak UID"
+                )}
+              </Button>
+              <Button 
+                type="button"
+                variant="outline"
+                onClick={() => syncTeamSpeakMutation.mutate()}
+                disabled={!user?.ts_uid || syncTeamSpeakMutation.isPending}
+                className="w-full sm:w-auto"
+              >
+                {syncTeamSpeakMutation.isPending ? (
+                  <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Syncing...</>
+                ) : (
+                  <><RefreshCw className="mr-2 h-4 w-4" /> Sync TeamSpeak Now</>
+                )}
+              </Button>
+            </div>
+            {!user?.ts_uid && (
+              <p className="text-sm text-muted-foreground">
+                💡 You must set your TeamSpeak UID before you can sync your groups.
+              </p>
+            )}
           </form>
         </CardContent>
       </Card>

@@ -4116,7 +4116,54 @@ export const deptRouter = createTRPCRouter({
               );
             }
 
-            // 5. Free up department ID number, if any
+            // 4b. Remove TeamSpeak groups by triggering a sync with cleared roles
+            // This will ensure TeamSpeak groups are removed when the user has no active roles
+            try {
+              console.log(`🎙️ Triggering TeamSpeak sync to remove groups for member ${targetMember.id}`);
+              // The Discord sync bot will handle TeamSpeak removal when it detects 
+              // the user has left/been removed (no active Discord roles)
+              // We can trigger this by calling the webhook endpoint if available
+              const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
+              const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
+              
+              if (M2M_API_KEY) {
+                const syncResponse = await axios.post(
+                  `${API_BASE_URL}/webhook/sync_user/${targetMember.discordId}`,
+                  {},
+                  {
+                    headers: { "X-API-Key": M2M_API_KEY },
+                    timeout: 5000,
+                  }
+                ).catch((err: any) => {
+                  console.warn(`⚠️ TeamSpeak sync webhook failed for ${targetMember.discordId}:`, err.message);
+                  return null;
+                });
+                
+                if (syncResponse) {
+                  console.log(`✅ TeamSpeak sync triggered for member ${targetMember.id}`);
+                }
+              } else {
+                console.warn(`⚠️ M2M_API_KEY not configured, cannot trigger TeamSpeak sync`);
+              }
+            } catch (tsErr) {
+              console.error(`❌ Error triggering TeamSpeak sync for member ${targetMember.id}:`, tsErr);
+              // Don't fail the removal if TeamSpeak sync fails
+            }
+
+            // 5. Remove all team memberships
+            try {
+              const deletedTeamMemberships = await postgrestDb
+                .delete(deptSchema.departmentTeamMemberships)
+                .where(eq(deptSchema.departmentTeamMemberships.memberId, targetMember.id))
+                .returning();
+              
+              console.log(`🗑️ Removed ${deletedTeamMemberships.length} team membership(s) for member ${targetMember.id}`);
+            } catch (teamErr) {
+              console.error(`❌ Error removing team memberships for member ${targetMember.id}:`, teamErr);
+              // Continue with removal even if team cleanup fails
+            }
+
+            // 6. Free up department ID number, if any
             if (targetMember.departmentIdNumber != null) {
               await postgrestDb
                 .update(deptSchema.departmentIdNumbers)
@@ -4129,7 +4176,7 @@ export const deptRouter = createTRPCRouter({
                 );
             }
 
-            // 6. Soft remove from department: hide from roster and clear sensitive assignment fields
+            // 7. Soft remove from department: hide from roster and clear sensitive assignment fields
             const updateResult = await postgrestDb
               .update(deptSchema.departmentMembers)
               .set({
@@ -4151,7 +4198,7 @@ export const deptRouter = createTRPCRouter({
               });
             }
 
-            // 7. Write audit log
+            // 8. Write audit log
             await postgrestDb.insert(deptSchema.departmentMemberAuditLogs).values({
               memberId: targetMember.id,
               departmentId: targetMember.departmentId,

@@ -9,7 +9,9 @@ export const DISCORD_SYNC_FEATURE_FLAGS = {
   ENABLE_DETAILED_LOGGING: process.env.NODE_ENV !== 'production',
   ENABLE_ROLE_VERIFICATION: true, // Keep verification enabled in all envs
   MAX_SYNC_RETRIES: 2,
-  ENABLE_ASYNC_MEMBER_CREATION_SYNC: true, // New flag: run Discord sync in background during member creation
+  // CRITICAL FIX: Disabled async sync to ensure roles are assigned before member creation completes
+  // This prevents the issue where members get 3-digit IDs but no Discord/TeamSpeak roles
+  ENABLE_ASYNC_MEMBER_CREATION_SYNC: false, // Changed from true - sync must complete before returning
   ENABLE_BATCH_ROLE_MANAGEMENT: true, // Prefer batch API when available
 } as const;
 

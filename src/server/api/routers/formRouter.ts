@@ -1297,6 +1297,12 @@ export const formRouter = createTRPCRouter({
       }
       const userDiscordId = ctx.dbUser.discordId;
       const userRoleIds = await getAllUserRoleIds(userDiscordId);
+      
+      // DEBUG: Log user's roles to help diagnose reviewer access issues
+      console.log(`[REVIEWER DEBUG] User ${userDiscordId} has roles:`, userRoleIds);
+      if (userRoleIds.length === 0) {
+        console.warn(`[REVIEWER DEBUG] User ${userDiscordId} has NO roles - cannot review any forms`);
+      }
 
       const conditions = [
         eq(formResponses.status, formResponseStatusEnum.enum.pending_review),

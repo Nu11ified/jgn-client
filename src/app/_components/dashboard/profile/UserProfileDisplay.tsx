@@ -44,7 +44,7 @@ const UserProfileDisplay: React.FC<UserProfileDisplayProps> = ({ user }) => {
   // NEW: TeamSpeak sync mutation
   const syncTeamSpeakMutation = api.user.syncTeamSpeak.useMutation({
     onSuccess: (data) => {
-      toast.success(data.message ?? "TeamSpeak sync initiated successfully!");
+      toast.success(data?.message ?? "TeamSpeak sync initiated successfully!");
     },
     onError: (error) => {
       toast.error(error.message ?? "Failed to sync TeamSpeak. Please try again.");

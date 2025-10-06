@@ -144,16 +144,20 @@ export default function DepartmentRosterPage() {
   const filteredMembers = rosterData?.members.filter((member) => {
     // Search filter
     if (!searchTerm) return true;
-    
+
     const searchLower = searchTerm.toLowerCase();
-    return (
-      ((member.callsign?.toLowerCase().includes(searchLower)) ??
-      (member.roleplayName?.toLowerCase().includes(searchLower)) ??
-      member.discordId.toLowerCase().includes(searchLower)) ||
-      ((member.badgeNumber?.toLowerCase().includes(searchLower)) ??
-      (member.rankName?.toLowerCase().includes(searchLower)) ??
-      member.teamName?.toLowerCase().includes(searchLower))
-    );
+
+    // Match if ANY of these fields include the search term
+    const haystacks = [
+      member.callsign,
+      member.roleplayName,
+      member.discordId,
+      member.badgeNumber ?? undefined,
+      member.rankName ?? undefined,
+      member.teamName ?? undefined,
+    ];
+
+    return haystacks.some((v) => v?.toLowerCase().includes(searchLower) ?? false);
   })
   // Sort by rank level (highest rank first, members without ranks at the bottom)
   .sort((a, b) => {

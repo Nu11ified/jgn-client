@@ -1,7 +1,7 @@
 "use client";
 
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { httpBatchStreamLink, loggerLink } from "@trpc/client";
+import { httpBatchStreamLink, httpBatchLink, loggerLink } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import { type inferRouterInputs, type inferRouterOutputs } from "@trpc/server";
 import { useState } from "react";
@@ -49,15 +49,22 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
             process.env.NODE_ENV === "development" ||
             (op.direction === "down" && op.result instanceof Error),
         }),
-        httpBatchStreamLink({
-          transformer: SuperJSON,
-          url: getBaseUrl() + "/api/trpc",
-          headers: () => {
-            const headers = new Headers();
-            headers.set("x-trpc-source", "nextjs-react");
-            return headers;
-          },
-        }),
+        // Use streaming when available and not explicitly disabled. Fallback to batch link on environments
+        // where streaming can be flaky (e.g., certain proxies or browsers).
+        ((): any => {
+          const supportsReadableStream = typeof window === 'undefined' ? true : 'ReadableStream' in window;
+          const enableStream = (process.env.NEXT_PUBLIC_TRPC_STREAM ?? 'true') !== 'false' && supportsReadableStream;
+          const linkFactory = enableStream ? httpBatchStreamLink : httpBatchLink;
+          return linkFactory({
+            transformer: SuperJSON,
+            url: getBaseUrl() + "/api/trpc",
+            headers: () => {
+              const headers = new Headers();
+              headers.set("x-trpc-source", "nextjs-react");
+              return headers;
+            },
+          });
+        })(),
       ],
     }),
   );

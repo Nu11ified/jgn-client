@@ -7,6 +7,35 @@ import * as deptSchema from "@/server/postgres/schema/department";
 import type { DiscordRole, DiscordRoleManagementResult } from "./types";
 import { DISCORD_SYNC_FEATURE_FLAGS } from "./constants";
 
+// Request tuning
+const ROLE_FETCH_TIMEOUT_MS = Number(process.env.ROLE_FETCH_TIMEOUT_MS ?? 8000);
+const ROLE_FETCH_RETRIES = Number(process.env.ROLE_FETCH_RETRIES ?? 1); // minimal retry to avoid pile-ups
+const ROLE_FETCH_RETRY_DELAY_MS = Number(process.env.ROLE_FETCH_RETRY_DELAY_MS ?? 300);
+const ROLE_CACHE_TTL_MS = Number(process.env.ROLE_CACHE_TTL_MS ?? 30000); // 30s cache to smooth bursts
+const MAX_CONCURRENT_ROLE_FETCHES = Number(process.env.MAX_CONCURRENT_ROLE_FETCHES ?? 4);
+const ROLE_FETCH_CIRCUIT_COOLDOWN_MS = Number(process.env.ROLE_FETCH_CIRCUIT_COOLDOWN_MS ?? 1500);
+
+// Simple in-memory cache and concurrency limiter
+const userRoleCache = new Map<string, { ts: number; roles: DiscordRole[] }>();
+let concurrentRoleFetches = 0;
+const roleFetchWaitQueue: Array<() => void> = [];
+let lastGlobalRoleFetchFailureAt = 0;
+
+async function acquireRoleFetchSlot(): Promise<void> {
+  if (concurrentRoleFetches < MAX_CONCURRENT_ROLE_FETCHES) {
+    concurrentRoleFetches++;
+    return;
+  }
+  await new Promise<void>((resolve) => roleFetchWaitQueue.push(resolve));
+  concurrentRoleFetches++;
+}
+
+function releaseRoleFetchSlot(): void {
+  concurrentRoleFetches = Math.max(0, concurrentRoleFetches - 1);
+  const next = roleFetchWaitQueue.shift();
+  if (next) next();
+}
+
 const API_BASE_URL = (env.INTERNAL_API_URL as string | undefined) ?? "http://localhost:8000";
 const M2M_API_KEY = env.M2M_API_KEY as string | undefined;
 
@@ -199,49 +228,89 @@ export const manageDiscordRolesBatch = async (
  * Fetches all Discord roles for a user
  */
 export const fetchUserDiscordRoles = async (discordId: string): Promise<DiscordRole[]> => {
-  try {
-    if (!M2M_API_KEY) {
-      console.warn("⚠️ M2M_API_KEY not available, skipping Discord role fetch");
-      return [];
-    }
-
-      if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
-        console.log("🔍 Fetching user Discord roles from API...");
-      }
-    const rolesResponse = await axios.get(
-      `${API_BASE_URL}/admin/user_server_roles/users/${discordId}/roles`,
-      {
-        headers: { "X-API-Key": M2M_API_KEY },
-      }
-    );
-
-    // Map the API response fields to our expected format
-    const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; role_name: string; }> ?? [];
-    const userRoles = rawRoles.map(role => ({ 
-      roleId: role.role_id, 
-      serverId: role.server_id 
-    }));
-
-    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
-      console.log(`📋 Found ${userRoles.length} Discord roles for user`);
-    }
-    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
-      // Show ALL roles, not just first 5
-      console.log("🔍 User's Discord roles (ALL):", userRoles.map(r => `${r.roleId} (${r.serverId})`));
-    } else {
-      // Show first 10 roles with indication if there are more
-      const displayRoles = userRoles.slice(0, 10).map(r => `${r.roleId} (${r.serverId})`);
-      if (userRoles.length > 10) {
-        displayRoles.push(`... and ${userRoles.length - 10} more`);
-      }
-      console.log("🔍 User's Discord roles:", displayRoles);
-    }
-
-    return userRoles;
-  } catch (error) {
-    console.error("❌ Failed to fetch user Discord roles:", error);
-    throw new Error("Failed to fetch Discord roles from API");
+  if (!M2M_API_KEY) {
+    console.warn("⚠️ M2M_API_KEY not available, skipping Discord role fetch");
+    return [];
   }
+
+  // Serve from cache if fresh
+  const cached = userRoleCache.get(discordId);
+  const now = Date.now();
+  if (cached && (now - cached.ts) <= ROLE_CACHE_TTL_MS) {
+    if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+      console.log(`🗄️ Using cached roles for ${discordId} (age=${now - cached.ts}ms)`);
+    }
+    return cached.roles;
+  }
+
+  // Circuit breaker: recently observed global failure
+  if (now - lastGlobalRoleFetchFailureAt < ROLE_FETCH_CIRCUIT_COOLDOWN_MS) {
+    throw new Error("Temporary backend unavailable (circuit cooling down)");
+  }
+
+  const url = `${API_BASE_URL}/admin/user_server_roles/users/${discordId}/roles`;
+  let lastErr: unknown = undefined;
+
+  await acquireRoleFetchSlot();
+  try {
+    for (let attempt = 1; attempt <= (1 + ROLE_FETCH_RETRIES); attempt++) {
+      try {
+        if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+          console.log(`🔍 Fetching user Discord roles from API (attempt ${attempt})...`);
+        }
+        const rolesResponse = await axios.get(url, {
+          headers: { "X-API-Key": M2M_API_KEY },
+          timeout: ROLE_FETCH_TIMEOUT_MS,
+        });
+
+        const rawRoles = rolesResponse.data as Array<{ role_id: string; server_id: string; role_name: string; }> ?? [];
+        const userRoles = rawRoles.map(role => ({ roleId: role.role_id, serverId: role.server_id }));
+
+        if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+          console.log(`📋 Found ${userRoles.length} Discord roles for user`);
+          const display = userRoles.slice(0, 10).map(r => `${r.roleId} (${r.serverId})`);
+          if (userRoles.length > 10) display.push(`... and ${userRoles.length - 10} more`);
+          console.log("🔍 User's Discord roles:", display);
+        }
+
+        // Cache and return
+        userRoleCache.set(discordId, { ts: Date.now(), roles: userRoles });
+        return userRoles;
+      } catch (error) {
+        lastErr = error;
+        // Update global failure timestamp for 5xx/timeouts
+        if (axios.isAxiosError(error)) {
+          const status = error.response?.status;
+          if (!status || status >= 500) {
+            lastGlobalRoleFetchFailureAt = Date.now();
+          }
+          // Do not retry on obvious non-retryable errors (4xx other than 408)
+          if (status && status >= 400 && status < 500 && status !== 408) {
+            console.error(`❌ Non-retryable error fetching roles (HTTP ${status})`);
+            break;
+          }
+        } else {
+          // Non-HTTP errors (timeouts etc.) mark as failure
+          lastGlobalRoleFetchFailureAt = Date.now();
+        }
+
+        if (attempt <= ROLE_FETCH_RETRIES) {
+          const delay = ROLE_FETCH_RETRY_DELAY_MS * attempt;
+          if (DISCORD_SYNC_FEATURE_FLAGS.ENABLE_DETAILED_LOGGING) {
+            console.warn(`⏳ Role fetch retrying in ${delay}ms (attempt ${attempt}/${1+ROLE_FETCH_RETRIES})`);
+          }
+          await new Promise(res => setTimeout(res, delay));
+          continue;
+        }
+        break;
+      }
+    }
+  } finally {
+    releaseRoleFetchSlot();
+  }
+
+  console.error("❌ Failed to fetch user Discord roles after retries:", lastErr);
+  throw new Error("Failed to fetch Discord roles from API");
 };
 
 /**

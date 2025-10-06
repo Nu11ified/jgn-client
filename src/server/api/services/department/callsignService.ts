@@ -31,6 +31,7 @@ export const regenerateAndUpdateMemberCallsign = async (memberId: number): Promi
       departmentIdNumber: deptSchema.departmentMembers.departmentIdNumber,
       rankId: deptSchema.departmentMembers.rankId,
       primaryTeamId: deptSchema.departmentMembers.primaryTeamId,
+      isActive: deptSchema.departmentMembers.isActive,
     })
     .from(deptSchema.departmentMembers)
     .where(eq(deptSchema.departmentMembers.id, memberId))
@@ -38,6 +39,74 @@ export const regenerateAndUpdateMemberCallsign = async (memberId: number): Promi
 
   if (member.length === 0) return;
   const m = member[0]!;
+
+  // If callsign is being regenerated for an active member without an ID number,
+  // allocate the next available department ID atomically and assign it.
+  if (!m.departmentIdNumber) {
+    const newIdNumber = await postgrestDb.transaction(async (tx) => {
+      // Find the next available ID number
+      const available = await tx
+        .select()
+        .from(deptSchema.departmentIdNumbers)
+        .where(
+          and(
+            eq(deptSchema.departmentIdNumbers.departmentId, m.departmentId),
+            eq(deptSchema.departmentIdNumbers.isAvailable, true)
+          )
+        )
+        .orderBy(asc(deptSchema.departmentIdNumbers.idNumber))
+        .limit(1);
+
+      let idNumber: number;
+      if (available.length > 0) {
+        idNumber = available[0]!.idNumber;
+      } else {
+        // Create the next ID number (100-999)
+        const maxId = await tx
+          .select()
+          .from(deptSchema.departmentIdNumbers)
+          .where(eq(deptSchema.departmentIdNumbers.departmentId, m.departmentId))
+          .orderBy(desc(deptSchema.departmentIdNumbers.idNumber))
+          .limit(1);
+
+        idNumber = maxId.length > 0 ? maxId[0]!.idNumber + 1 : 100;
+        if (idNumber > 999) {
+          throw new TRPCError({ code: "CONFLICT", message: "No available ID numbers (100-999) for this department" });
+        }
+
+        await tx.insert(deptSchema.departmentIdNumbers).values({
+          departmentId: m.departmentId,
+          idNumber,
+          isAvailable: true,
+        });
+      }
+
+      // Reserve the ID for this member
+      await tx
+        .update(deptSchema.departmentIdNumbers)
+        .set({
+          isAvailable: false,
+          currentMemberId: m.id,
+        })
+        .where(
+          and(
+            eq(deptSchema.departmentIdNumbers.departmentId, m.departmentId),
+            eq(deptSchema.departmentIdNumbers.idNumber, idNumber)
+          )
+        );
+
+      return idNumber;
+    });
+
+    // Persist the assigned ID on the member
+    await postgrestDb
+      .update(deptSchema.departmentMembers)
+      .set({ departmentIdNumber: newIdNumber })
+      .where(eq(deptSchema.departmentMembers.id, m.id));
+
+    // Reflect the assigned ID in local variable so callsign includes it
+    m.departmentIdNumber = newIdNumber as any;
+  }
 
   // Get department prefix
   const department = await postgrestDb

@@ -49,14 +49,37 @@ export const userRouter = createTRPCRouter({
           `${API_BASE_URL}/profile/me`,
           {
             headers: { "X-API-Key": ctx.dbUser.apiKey },
+            timeout: 8000, // fast-fail to avoid hanging UI if upstream is slow
           }
         );
         const user = response.data as UserInDB;
         return {
           ...user,
           discordId: user.discord_id,
+          degraded: false as const,
         };
       } catch (error) {
+        // Graceful fallback: if upstream is down or timed out, return a degraded profile
+        if (axios.isAxiosError(error)) {
+          const status = error.response?.status;
+          const timedOut = error.code === "ECONNABORTED";
+          const upstreamDown = typeof status === "number" && status >= 500;
+          if ((timedOut || upstreamDown) && ctx.dbUser) {
+            console.warn("[user.getMe] Upstream unavailable; returning degraded profile from local DB.");
+            return {
+              // Map local DB fields to the expected shape
+              username: ctx.dbUser.username,
+              ts_uid: ctx.dbUser.tsUid ?? null,
+              is_moderator: ctx.dbUser.isModerator,
+              is_admin: ctx.dbUser.isAdmin,
+              discordId: String(ctx.dbUser.discordId),
+              api_key: ctx.dbUser.apiKey,
+              last_synced: ctx.dbUser.lastSynced?.toISOString?.() ?? new Date().toISOString(),
+              degraded: true as const,
+              warning: "External service temporarily unavailable; showing cached profile.",
+            } as any; // Return a compatible shape with an extra degraded flag
+          }
+        }
         handleApiError(error, "getMe");
       }
     }),

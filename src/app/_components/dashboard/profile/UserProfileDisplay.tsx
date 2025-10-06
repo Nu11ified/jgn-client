@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { api } from "@/trpc/react";
 import { toast } from "sonner";
 import { RefreshCw } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 type UserProfile = RouterOutputs["user"]["getMe"];
 
@@ -85,6 +86,16 @@ const UserProfileDisplay: React.FC<UserProfileDisplayProps> = ({ user }) => {
 
   return (
     <div className="space-y-8">
+      {/* Degraded banner */}
+      {(user as any)?.degraded && (
+        <Alert className="border-yellow-300 bg-yellow-50 text-yellow-900">
+          <AlertTitle>Partial data shown</AlertTitle>
+          <AlertDescription>
+            Some external services are temporarily unavailable. Displaying cached profile data; actions may be limited.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="text-2xl">Account Information</CardTitle>

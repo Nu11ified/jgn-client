@@ -8,12 +8,12 @@ import type { DiscordRole, DiscordRoleManagementResult } from "./types";
 import { DISCORD_SYNC_FEATURE_FLAGS } from "./constants";
 
 // Request tuning
-const ROLE_FETCH_TIMEOUT_MS = Number(process.env.ROLE_FETCH_TIMEOUT_MS ?? 8000);
-const ROLE_FETCH_RETRIES = Number(process.env.ROLE_FETCH_RETRIES ?? 1); // minimal retry to avoid pile-ups
+const ROLE_FETCH_TIMEOUT_MS = Number(process.env.ROLE_FETCH_TIMEOUT_MS ?? 3000); // lower to fail fast
+const ROLE_FETCH_RETRIES = Number(process.env.ROLE_FETCH_RETRIES ?? 0); // avoid piling up retries
 const ROLE_FETCH_RETRY_DELAY_MS = Number(process.env.ROLE_FETCH_RETRY_DELAY_MS ?? 300);
 const ROLE_CACHE_TTL_MS = Number(process.env.ROLE_CACHE_TTL_MS ?? 30000); // 30s cache to smooth bursts
-const MAX_CONCURRENT_ROLE_FETCHES = Number(process.env.MAX_CONCURRENT_ROLE_FETCHES ?? 4);
-const ROLE_FETCH_CIRCUIT_COOLDOWN_MS = Number(process.env.ROLE_FETCH_CIRCUIT_COOLDOWN_MS ?? 1500);
+const MAX_CONCURRENT_ROLE_FETCHES = Number(process.env.MAX_CONCURRENT_ROLE_FETCHES ?? 2); // reduce load during incidents
+const ROLE_FETCH_CIRCUIT_COOLDOWN_MS = Number(process.env.ROLE_FETCH_CIRCUIT_COOLDOWN_MS ?? 5000); // back off longer after failures
 
 // Simple in-memory cache and concurrency limiter
 const userRoleCache = new Map<string, { ts: number; roles: DiscordRole[] }>();
@@ -309,8 +309,14 @@ export const fetchUserDiscordRoles = async (discordId: string): Promise<DiscordR
     releaseRoleFetchSlot();
   }
 
-  console.error("❌ Failed to fetch user Discord roles after retries:", lastErr);
-  throw new Error("Failed to fetch Discord roles from API");
+  console.warn("⚠️ Failed to fetch user Discord roles after retries:", lastErr);
+  // Degrade gracefully: serve stale cache if available, otherwise empty list
+  const stale = userRoleCache.get(discordId);
+  if (stale) {
+    console.warn("⚠️ Serving stale cached roles for", discordId);
+    return stale.roles;
+  }
+  return [];
 };
 
 /**
